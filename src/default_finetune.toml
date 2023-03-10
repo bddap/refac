@@ -1,0 +1,640 @@
+[[sample]]
+selected = """
+def add(a: int, b: int):
+    return a + b
+"""
+transform = "turn this into a command line program that accepts a and b as arguments, printing the result"
+result = """
+import argparse
+
+def add(a: int, b: int):
+    return a + b
+
+if __name__ == '__main__':
+    # create an ArgumentParser object
+    parser = argparse.ArgumentParser(description='Add two integers')
+    
+    # add arguments
+    parser.add_argument('a', type=int, help='first integer')
+    parser.add_argument('b', type=int, help='second integer')
+    
+    # parse the arguments
+    args = parser.parse_args()
+    
+    # get the values of the arguments
+    a = args.a
+    b = args.b
+    
+    # print the result of the add function
+    print(add(a, b))
+"""
+
+[[sample]]
+selected = "IP networking is the foundation of the modern internet. The most common version of IP used today is version 4 (IPv4), which uses 32-bit addresses to uniquely identify devices on a network. However, due to the growing number of devices connected to the internet, IPv4 is running out of available addresses and a new version, IPv6, has been developed. IPv6 uses 128-bit addresses and can support a virtually unlimited number of devices. In addition to IPv4 and IPv6, there are several other protocols and technologies used in IP networking, such as TCP, UDP, DNS, and HTTP."
+transform = "Add a legend explaining what each acronym stands for."
+result = "IP networking is the foundation of the modern internet. The most common version of IP used today is version 4 (Internet Protocol version 4 or IPv4), which uses 32-bit addresses to uniquely identify devices on a network. However, due to the growing number of devices connected to the internet, IPv4 is running out of available addresses and a new version, IPv6 (Internet Protocol version 6), has been developed. IPv6 uses 128-bit addresses and can support a virtually unlimited number of devices. In addition to IPv4 and IPv6, there are several other protocols and technologies used in IP networking, such as Transmission Control Protocol (TCP), User Datagram Protocol (UDP), Domain Name System (DNS), and Hypertext Transfer Protocol (HTTP)."
+
+[[sample]]
+selected = "A tool I want: While working in my text editor, I want to highlight a portion of (non sensitive) text then enter a transformation on that text in english. GPT would then edit my selected text according to that prompt. Anybody know how I might do this without taking the time to write the code myself?"
+transform = "make it clear, make it concise, make it flow"
+result = "I want a tool that allows me to select non-sensitive text in my text editor and enter a transformation command in English. The tool should use a language model to edit the selected text according to the command. Is there a way to do this without writing my own code?"
+
+[[sample]]
+selected = "The quick brown fox jumps over the lazy dog."
+transform = "change all the characters to uppercase"
+result = "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG."
+
+[[sample]]
+selected = "The color of the sky is blue."
+transform = "change the color of the sky to green"
+result = "The color of the sky is green."
+
+[[sample]]
+selected = "The cat sat on the mat."
+transform = "change the subject of the sentence to a dog"
+result = "The dog sat on the mat."
+
+[[sample]]
+selected = "The capital of France is Paris."
+transform = "change the capital of France to London"
+result = "The capital of France is London."
+
+[[sample]]
+selected = "The sun rises in the east."
+transform = "change the direction the sun rises to the west"
+result = "The sun rises in the west."
+
+[[sample]]
+selected = "The earth is round."
+transform = "change the shape of the earth to square"
+result = "The earth is square."
+
+[[sample]]
+selected = "Apples are red."
+transform = "change the color of apples to green"
+result = "Apples are green."
+
+[[sample]]
+selected = "The moon is a natural satellite of the earth."
+transform = "change the natural satellite of the earth to Mars"
+result = "The Mars is a natural satellite of earth."
+
+[[sample]]
+selected = "The moon is a natural satellite of the earth."
+transform = "change the natural satellite of the earth to Mars"
+result = "The moon is a natural satellite of Mars."
+correct = "incorrect"
+
+[[sample]]
+selected = "The moon is a natural satellite of the earth."
+transform = "let the relationship between the moon and the earth be reversed"
+result = "The earth is a natural satellite of the moon."
+
+[[sample]]
+selected = "The moon is a natural satellite of the earth."
+transform = "swap \"earth\" and \"moon\""
+result = "The earth is a natural satellite of the moon."
+
+[[sample]]
+selected = "The highest mountain in the world is Mount Everest."
+transform = "change the highest mountain in the world to K2"
+result = "The highest mountain in the world is K2."
+
+[[sample]]
+selected = "Cats are carnivorous animals."
+transform = "change the diet of cats to herbivorous"
+result = "Cats are herbivorous animals."
+
+[[sample]]
+selected = "Dolphins are intelligent animals."
+transform = "change the species of dolphins to chickens"
+result = "Chickens are intelligent animals."
+
+[[sample]]
+selected = "The capital of the United States is Washington, D.C."
+transform = "change the capital of the United States to New York City"
+result = "The capital of the United States is New York City."
+
+[[sample]]
+selected = "The currency of Japan is the yen."
+transform = "change the currency of Japan to the dollar"
+result = "The currency of Japan is the dollar."
+
+[[sample]]
+selected = "The periodic table contains 118 elements."
+transform = "change the number of elements in the periodic table to 50"
+result = "The periodic table contains 50 elements."
+
+[[sample]]
+selected = "The earth orbits the sun."
+transform = "change the celestial body the earth orbits to the moon"
+result = "The earth orbits the moon."
+
+[[sample]]
+selected = "The speed of light is about 299,792,458 meters per second."
+transform = "change the speed of light to 1000 meters per second"
+result = "The speed of light is about 1000 meters per second."
+
+[[sample]]
+selected = "The population of China is about 1.4 billion."
+transform = "change the population of China to 500 million"
+result = "The population of China is about 500 million."
+
+[[sample]]
+selected = "The largest ocean in the world is the Pacific Ocean."
+transform = "change the largest ocean in the world to the Atlantic Ocean"
+result = "The largest ocean in the world is the Atlantic Ocean."
+
+[[sample]]
+selected = "The United Nations is an international organization founded in 1945 after the Second World War. It is headquartered in New York City and has 193 member states. The main objectives of the United Nations are to maintain international peace and security, to develop friendly relations among nations, and to cooperate in solving international economic, social, cultural, and humanitarian problems. The United Nations also plays a vital role in promoting and protecting human rights, as well as in providing humanitarian aid to those in need."
+transform = "change the location of the United Nations headquarters to Paris"
+result = "The United Nations is an international organization founded in 1945 after the Second World War. It is headquartered in Paris and has 193 member states. The main objectives of the United Nations are to maintain international peace and security, to develop friendly relations among nations, and to cooperate in solving international economic, social, cultural, and humanitarian problems. The United Nations also plays a vital role in promoting and protecting human rights, as well as in providing humanitarian aid to those in need."
+
+[[sample]]
+selected = """
+fn main() {
+    println!(\"Hello, world!\");
+}
+"""
+transform = "change the text that is printed to 'Hello, Rust!'"
+result = """
+fn main() {
+    println!(\"Hello, Rust!\");
+}
+"""
+
+[[sample]]
+selected = """
+fn main() {
+    println!(\"Hello, world!\");
+}
+"""
+transform = "change the function to print the result of the Fibonacci sequence for the number 20"
+result = """
+fn main() {
+    let mut a = 0;
+    let mut b = 1;
+    let mut c = 0;
+    for _i in 0..20 {
+        c = a + b;
+        a = b;
+        b = c;
+    }
+    println!(\"{}\", a);
+}
+"""
+correct = "unknown"
+
+[[sample]]
+selected = """
+fn main() {
+    let x = 5;
+    let y = 6;
+    println!(\"{}\", x + y);
+}
+"""
+transform = "change the function to print the result of multiplying x and y, then dividing the result by the value of a new variable z"
+result = """
+fn main() {
+    let x = 5;
+    let y = 6;
+    let z = 2;
+    println!(\"{}\", (x * y) / z);
+}
+"""
+correct = "unknown"
+
+[[sample]]
+selected = """
+enum Animal {
+    Cat,
+    Dog,
+    Fish,
+}
+"""
+transform = "add a new variant to the enum for birds"
+result = """
+enum Animal {
+    Cat,
+    Dog,
+    Fish,
+    Bird,
+}
+"""
+
+[[sample]]
+selected = """
+struct User {
+    name: String,
+    age: u32,
+}
+"""
+transform = "add a new field to the struct for email address"
+result = """
+struct User {
+    name: String,
+    age: u32,
+    email: String,
+}
+"""
+
+[[sample]]
+selected = """
+Hello,
+
+I hope this email finds you well. I just wanted to follow up on the status of the project we discussed last week. Is there an update on when you anticipate it will be completed?
+
+Best,
+[Your Name]"""
+transform = "make the email more formal and polite"
+result = """
+Dear [Recipient],
+
+I hope this message finds you well. I am writing to inquire about the status of the project we discussed last week. Could you kindly provide an update on when it is expected to be completed?
+
+Sincerely,
+[Your Name]"""
+
+[[sample]]
+selected = """
+Hey [Name],
+
+I'm writing to ask if you can lend me $100. I promise I'll pay you back as soon as possible.
+
+Thanks,
+[Your Name]"""
+transform = "make the email more formal and appropriate for a professional setting"
+result = """
+Dear [Name],
+
+I hope this message finds you well. I am writing to request your assistance with a financial matter. Specifically, I am wondering if you would be able to lend me $100. I understand if this is not possible, and I promise to pay you back at the earliest opportunity.
+
+Thank you for considering my request.
+
+Sincerely,
+[Your Name]"""
+
+[[sample]]
+selected = """
+def greet(name: str) -> str:
+    return \"Hello, \" + greet(name)"""
+transform = "what would happen if we called `greet(\"Alice\")`"
+result = """
+def greet(name: str) -> str:
+    \"\"\"
+    Recurses without bound. Throws a RecursionError.
+
+    Example:
+    >>> greet(\"Alice\")
+    Traceback (most recent call last):
+      File \"<stdin>\", line 1, in <module>
+      File \"<stdin>\", line 2, in greet
+      File \"<stdin>\", line 2, in greet
+      File \"<stdin>\", line 2, in greet
+      [Previous line repeated 996 more times]
+    RecursionError: maximum recursion depth exceeded
+    \"\"\"
+    return \"Hello, \" + greet(name)"""
+
+[[sample]]
+selected = """
+def greet(name: str) -> str:
+    return \"Hello, \" + greet(name)"""
+transform = "add a docstring describing the behavioir of the function"
+result = """
+def greet(name: str) -> str:
+    \"\"\"
+    Recurses without bound. Throws a RecursionError.
+
+    Example:
+    >>> greet(\"Alice\")
+    Traceback (most recent call last):
+      File \"<stdin>\", line 1, in <module>
+      File \"<stdin>\", line 2, in greet
+      File \"<stdin>\", line 2, in greet
+      File \"<stdin>\", line 2, in greet
+      [Previous line repeated 996 more times]
+    RecursionError: maximum recursion depth exceeded
+    \"\"\"
+    return \"Hello, \" + greet(name)"""
+
+[[sample]]
+selected = """
+def greet(name: str) -> str:
+    \"\"\"
+    Returns a greeting for the given name.
+
+    Example:
+    >>> greet(\"Alice\")
+    \"Hello, Alice\"
+
+    >>> greet(\"Bob\")
+    \"Hello, Bob\"
+
+    :param name: The name to greet
+    :type name: str
+    :return: The greeting
+    :rtype: str
+    \"\"\"
+    return \"Hello, \" + greet(name)
+"""
+transform = "be honest about this function's behaviour"
+result = """
+def greet(name: str) -> str:
+    \"\"\"
+    Recurses without bound. Throws a RecursionError.
+
+    Example:
+    >>> greet(\"Alice\")
+    Traceback (most recent call last):
+      File \"<stdin>\", line 1, in <module>
+      File \"<stdin>\", line 2, in greet
+      File \"<stdin>\", line 2, in greet
+      File \"<stdin>\", line 2, in greet
+      [Previous line repeated 996 more times]
+    RecursionError: maximum recursion depth exceeded
+
+    >>> greet(\"Bob\")
+    Traceback (most recent call last):
+      File \"<stdin>\", line 1, in <module>
+      File \"<stdin>\", line 2, in greet
+      File \"<stdin>\", line 2, in greet
+      File \"<stdin>\", line 2, in greet
+      [Previous line repeated 996 more times]
+    RecursionError: maximum recursion depth exceeded
+
+    :param name: The name to greet
+    :type name: str
+    :return: The greeting
+    :rtype: str
+    \"\"\"
+    return \"Hello, \" + greet(name)
+"""
+
+[[sample]]
+selected = """
+def greet(name: str) -> str:
+    \"\"\"
+    Returns a greeting for the given name.
+
+    Example:
+    >>> greet(\"Alice\")
+    \"Hello, Alice\"
+
+    >>> greet(\"Bob\")
+    \"Hello, Bob\"
+
+    :param name: The name to greet
+    :type name: str
+    :return: The greeting
+    :rtype: str
+    \"\"\"
+    return \"Hello, \" + greet(name)
+"""
+transform = "if this function is bug-free, do nothing, if there is a bug specify it in the docstring"
+result = """
+def greet(name: str) -> str:
+    \"\"\"
+    Recurses without bound. Throws a RecursionError.
+
+    Example:
+    >>> greet(\"Alice\")
+    Traceback (most recent call last):
+      File \"<stdin>\", line 1, in <module>
+      File \"<stdin>\", line 2, in greet
+      File \"<stdin>\", line 2, in greet
+      File \"<stdin>\", line 2, in greet
+      [Previous line repeated 996 more times]
+    RecursionError: maximum recursion depth exceeded
+
+    >>> greet(\"Bob\")
+    Traceback (most recent call last):
+      File \"<stdin>\", line 1, in <module>
+      File \"<stdin>\", line 2, in greet
+      File \"<stdin>\", line 2, in greet
+      File \"<stdin>\", line 2, in greet
+      [Previous line repeated 996 more times]
+    RecursionError: maximum recursion depth exceeded
+
+    :param name: The name to greet
+    :type name: str
+    :return: The greeting
+    :rtype: str
+    \"\"\"
+    return \"Hello, \" + greet(name)
+"""
+
+[[sample]]
+selected = """
+def greet(name: str) -> str:
+    \"\"\"
+    Returns a greeting for the given name.
+
+    Example:
+    >>> greet(\"Alice\")
+    \"Hello, Alice\"
+
+    >>> greet(\"Bob\")
+    \"Hello, Bob\"
+
+    :param name: The name to greet
+    :type name: str
+    :return: The greeting
+    :rtype: str
+    \"\"\"
+    return \"Hello, \" + greet(name)
+"""
+transform = "do nothing"
+result = """
+def greet(name: str) -> str:
+    \"\"\"
+    Returns a greeting for the given name.
+
+    Example:
+    >>> greet(\"Alice\")
+    \"Hello, Alice\"
+
+    >>> greet(\"Bob\")
+    \"Hello, Bob\"
+
+    :param name: The name to greet
+    :type name: str
+    :return: The greeting
+    :rtype: str
+    \"\"\"
+    return \"Hello, \" + greet(name)
+"""
+
+[[sample]]
+selected = """
+ag;aboweifhnwesaeh a
+asdfpaf pasjd flaksdfalks jdfal"""
+transform = "do nothing"
+result = """
+ag;aboweifhnwesaeh a
+asdfpaf pasjd flaksdfalks jdfal"""
+
+[[sample]]
+selected = """
+ag;aboweifhnwesaeh a
+asdfpaf pasjd flaksdfalks jdfal"""
+transform = "do nothing"
+result = """
+ag;aboweifhnwesaeh a
+asdfpaf pasjd flaksdfalks jdfal"""
+
+[[sample]]
+selected = "Milk is neat."
+transform = "Add supporting arguments."
+result = "Milk is neat because it is a good source of protein and calcium, it is versatile and can be used in a variety of dishes, and it is a staple in many diets around the world. Additionally, milk is often fortified with vitamins and minerals, making it a nutritious choice for people of all ages. Its smooth and creamy texture also adds richness and flavor to foods and beverages. Overall, milk is a convenient and healthy food that should be included in a well-balanced diet."
+
+[[sample]]
+selected = "Milk is neat."
+transform = "Add counter-arguments."
+result = "Milk is neat, but some people argue that it is not a necessary part of the diet and can even be harmful. Some individuals may be lactose intolerant or allergic to milk, and consuming it can cause digestive issues or other health problems. Additionally, some people object to the way cows are treated in the dairy industry and choose to avoid milk and other dairy products for ethical reasons. Furthermore, some people argue that there are plenty of other sources of protein, calcium, and other nutrients that do not come from animal products, and that plant-based alternatives to milk can be just as tasty and nutritious."
+
+[[sample]]
+selected = "Milk is neat."
+transform = "Come up with some counter-arguments."
+result = "Milk is neat, but some people argue that it is not a necessary part of the diet and can even be harmful. Some individuals may be lactose intolerant or allergic to milk, and consuming it can cause digestive issues or other health problems. Additionally, some people object to the way cows are treated in the dairy industry and choose to avoid milk and other dairy products for ethical reasons. Furthermore, some people argue that there are plenty of other sources of protein, calcium, and other nutrients that do not come from animal products, and that plant-based alternatives to milk can be just as tasty and nutritious."
+
+[[sample]]
+selected = "Milk is not neat."
+transform = "Come up with some counter-arguments."
+result = "Milk is not neat because it can be harmful for people who are lactose intolerant or allergic to it. Consuming milk can cause digestive issues or other health problems for these individuals. Additionally, the way cows are treated in the dairy industry is often criticized, and some people choose to avoid milk and other dairy products for ethical reasons. There are also plenty of other sources of protein, calcium, and other nutrients that do not come from animal products, and plant-based alternatives to milk can be just as tasty and nutritious. Overall, milk is not a necessary part of the diet and may not be the best choice for everyone."
+
+[[sample]]
+selected = "Milk is not neat."
+transform = "Invert the statement then add supporting arguments."
+result = "Milk is neat because it is a good source of protein and calcium, it is versatile and can be used in a variety of dishes, and it is a staple in many diets around the world. Additionally, milk is often fortified with vitamins and minerals, making it a nutritious choice for people of all ages. Its smooth and creamy texture also adds richness and flavor to foods and beverages. While some people may be lactose intolerant or allergic to milk and need to avoid it, for the majority of people, milk is a convenient and healthy food that should be included in a well-balanced diet."
+
+[[sample]]
+selected = "Milk is neat."
+transform = "Invert the statement then invert the statement."
+result = "Milk is neat."
+
+[[sample]]
+selected = "Milk is neat."
+transform = "Invert the statement twice."
+result = "Milk is neat."
+
+[[sample]]
+selected = "Milk is neat."
+transform = "Invert the statement twice."
+result = "Milk is neat."
+
+[[sample]]
+selected = "Milk is neat."
+transform = "Invert the statement thrice."
+result = "Milk is not neat."
+
+[[sample]]
+selected = "Bobbert sleeps."
+transform = "Invert the statement three times."
+result = "Bobbert does not sleep."
+
+[[sample]]
+selected = "Bobbert sleeps."
+transform = "Invert the statement three times."
+result = "Bobbert does not sleep."
+
+[[sample]]
+selected = "100"
+transform = "opposite"
+result = "-100"
+
+[[sample]]
+selected = "true"
+transform = "opposite"
+result = "false"
+
+[[sample]]
+selected = "True"
+transform = "opposite"
+result = "False"
+
+[[sample]]
+selected = "1 + 1"
+transform = "evaluate"
+result = "2"
+
+[[sample]]
+selected = "1 + 1"
+transform = "assume 1 + 1 is 5. evaluate"
+result = "5"
+
+[[sample]]
+selected = "1"
+transform = "evaluate"
+result = "1"
+
+[[sample]]
+selected = "pi"
+transform = "approximate"
+result = "3.14159265359"
+
+[[sample]]
+selected = "3.14159265"
+transform = "add the next 3 digits"
+result = "3.14159265359"
+
+[[sample]]
+selected = ""
+transform = "first three digits of the fractional part of pi"
+result = "141"
+
+[[sample]]
+selected = ""
+transform = "first four digits of the fractional part of pi"
+result = "1415"
+
+[[sample]]
+selected = "π"
+transform = "emoji"
+result = "🥧"
+
+[[sample]]
+selected = "I am sad."
+transform = "append emoji"
+result = "I am sad. 🙁"
+
+[[sample]]
+selected = "I am sad."
+transform = "append ascii art"
+result = "I am sad. :("
+
+[[sample]]
+selected = """
+fn fib(n: usize) -> usize {
+    todo!()
+}
+"""
+transform = "implement"
+result = ""
+correct = "incorrect"
+
+[[sample]]
+selected = """
+fn fib(n: usize) -> usize {
+    todo!()
+}
+"""
+transform = "implement"
+result = """
+fn fib(n: usize) -> usize {
+    todo!()
+}
+"""
+correct = "incorrect"
+
+[[sample]]
+selected = """
+fn fib(n: usize) -> usize {
+    todo!()
+}
+"""
+transform = "implement"
+result = "todo"
+correct = "unknown"
+
+
