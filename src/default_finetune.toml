@@ -1136,3 +1136,196 @@ result = """
         }
 """
 
+[[sample]]
+transform = "spot the bug"
+selected = """
+🙁
+🌲
+🐛
+🍎
+"""
+result = """
+🙂
+🌲
+🐛 <- here it is
+🍎
+"""
+
+[[sample]]
+transform = "grow the forest"
+selected = """
+🌲🌲🌲
+🌲🌲🌲
+"""
+result = """
+🌲🌲🌲
+🌲🌲🌲
+🌲🌲🌲
+"""
+
+[[sample]]
+transform = "snowflake emoji"
+selected = ""
+result = "❄"
+
+[[sample]]
+transform = "write a chat between two people"
+selected = ""
+result = """
+Alice: Hello!
+Bob: Hi!
+Alice: How are you?
+Bob: I'm good, thanks!
+Alice: That's good to hear.
+Bob: Yeah, I'm glad to hear that.
+Alice: I'm going to go now.
+Bob: Bye!
+"""
+
+[[sample]]
+transform = "encode this chat as json"
+selected = """
+Alice: Hello!
+Bob: Hi!
+Alice: How are you?
+Bob: I'm good, thanks!
+Alice: That's good to hear.
+Bob: Yeah, I'm glad to hear that.
+Alice: I'm going to go now.
+Bob: Bye!
+"""
+result = """
+[
+    {
+        "name": "Alice",
+        "message": "Hello!"
+    },
+    {
+        "name": "Bob",
+        "message": "Hi!"
+    },
+    {
+        "name": "Alice",
+        "message": "How are you?"
+    },
+    {
+        "name": "Bob",
+        "message": "I'm good, thanks!"
+    },
+    {
+        "name": "Alice",
+        "message": "That's good to hear."
+    },
+    {
+        "name": "Bob",
+        "message": "Yeah, I'm glad to hear that."
+    },
+    {
+        "name": "Alice",
+        "message": "I'm going to go now."
+    },
+    {
+        "name": "Bob",
+        "message": "Bye!"
+    }
+]
+"""
+
+[[sample]]
+transform = "Alice prefers to be called Eggplant"
+selected = """
+[
+    {
+        "name": "Alice",
+        "message": "Hello!"
+    },
+    {
+        "name": "Bob",
+        "message": "Hi!"
+    },
+    {
+        "name": "Alice",
+        "message": "How are you?"
+    },
+    {
+        "name": "Bob",
+        "message": "I'm good, thanks!"
+    },
+    {
+        "name": "Alice",
+        "message": "That's good to hear."
+    },
+    {
+        "name": "Bob",
+        "message": "Yeah, I'm glad to hear that."
+    },
+    {
+        "name": "Alice",
+        "message": "I'm going to go now."
+    },
+    {
+        "name": "Bob",
+        "message": "Bye!"
+    }
+]
+"""
+result = """
+[
+    {
+        "name": "Eggplant",
+        "message": "Hello!"
+    },
+    {
+        "name": "Bob",
+        "message": "Hi!"
+    },
+    {
+        "name": "Eggplant",
+        "message": "How are you?"
+    },
+    {
+        "name": "Bob",
+        "message": "I'm good, thanks!"
+    },
+    {
+        "name": "Eggplant",
+        "message": "That's good to hear."
+    },
+    {
+        "name": "Bob",
+        "message": "Yeah, I'm glad to hear that."
+    },
+    {
+        "name": "Eggplant",
+        "message": "I'm going to go now."
+    },
+    {
+        "name": "Bob",
+        "message": "Bye!"
+    }
+]
+"""
+
+[[sample]]
+transform = "make alice mention eggplant during the chat"
+selected = """
+Alice: Hello!
+Bob: Hi!
+Alice: How are you?
+Bob: I'm good, thanks!
+Alice: That's good to hear.
+Bob: Yeah, I'm glad to hear that.
+Alice: I'm going to go now.
+Bob: Bye!
+"""
+result = """
+Alice: Hello!
+Bob: Hi!
+Alice: Did you try my new eggplant recipe?
+Bob: Yes, it was delicious!
+Alice: That's good to hear.
+Bob: Thanks for the recipe!
+Alice: I'm going to go now.
+Bob: Bye!
+"""
+
