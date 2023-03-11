@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io::Cursor};
+use std::{collections::HashMap, io::Cursor, time::Duration};
 
 use reqwest::blocking::multipart::{Form, Part};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -6,8 +6,8 @@ use serde_json::Value;
 use tap::Pipe;
 
 pub struct Client {
-    pub client: reqwest::blocking::Client,
-    pub token: String,
+    client: reqwest::blocking::Client,
+    token: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -146,7 +146,7 @@ pub struct CompletionChoice {
 #[derive(Deserialize, Debug)]
 pub struct CompletionUsage {
     pub prompt_tokens: usize,
-    pub completion_tokens: usize,
+    pub completion_tokens: Option<usize>,
     pub total_tokens: usize,
 }
 
@@ -156,6 +156,17 @@ fn form_part_file(filename: &str, file_content: &[u8]) -> Part {
 }
 
 impl Client {
+    pub fn new(token: &str) -> Client {
+        let client = reqwest::blocking::ClientBuilder::new()
+            .timeout(Duration::from_secs(60 * 4))
+            .build()
+            .unwrap();
+        Client {
+            token: token.to_string(),
+            client,
+        }
+    }
+
     fn auth(&self) -> String {
         format!("Bearer {}", self.token)
     }
@@ -177,13 +188,6 @@ impl Client {
             .pipe(err_with_body)?
             .pipe(try_json)?;
         Ok(resp)
-    }
-
-    pub fn new(openai_api_key: String) -> Self {
-        Client {
-            client: reqwest::blocking::Client::new(),
-            token: openai_api_key,
-        }
     }
 
     pub fn fine_tune(&self, input: &FinetuneInput) -> anyhow::Result<FineTuneResponse> {

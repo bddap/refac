@@ -1,3 +1,10 @@
+// IDEA: generating many samples is time consuming, perhaps we can get codex or
+//       chatgpt to generate a bunch of samples that can be manually vetted
+
+// IDEA: try getting completions from a gpt3.5 model without any training
+
+// TODO: can we train on negetive examples?
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -13,6 +20,8 @@ pub struct Sample {
 }
 
 impl Sample {
+    /// TODO: improve prompts using advice from openai
+    ///       https://platform.openai.com/docs/guides/fine-tuning/data-formatting
     pub fn prompt_for(selected: &str, transform: &str) -> String {
         Sample {
             selected: selected.to_string(),

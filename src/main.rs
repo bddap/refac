@@ -7,10 +7,10 @@ use std::time::Duration;
 
 use api::FinetuneInput;
 use clap::Parser;
-use config_files::Config;
 
 use crate::{
     api::{Client, CompletionRequest},
+    config_files::Config,
     config_files::{Secrets, TrainingData},
     pretrain_sample::Sample,
     tokenizer::count_tokens,
@@ -84,7 +84,7 @@ fn run() -> anyhow::Result<()> {
 }
 
 fn fine_tune(secret: &Secrets, td: &TrainingData) -> anyhow::Result<()> {
-    let c = Client::new(secret.openai_api_key.to_string());
+    let c = Client::new(&secret.openai_api_key);
 
     let file_contents = td.to_jsonl();
     let resp = c.upload("finetune.jsonl", file_contents.as_bytes())?;
@@ -147,7 +147,7 @@ fn refactor(
     // models are all 2049?
     const MAX_TOKENS: usize = 2049;
 
-    let c = Client::new(sc.openai_api_key.to_string());
+    let c = Client::new(&sc.openai_api_key);
     let prompt = Sample::prompt_for(selected, transform);
 
     let rest = MAX_TOKENS
@@ -168,7 +168,8 @@ fn refactor(
         presence_penalty: None,
         frequency_penalty: None,
         best_of: None,
-        logit_bias: None,
+        // make the end of text token more likely
+        logit_bias: Some([("50256".to_string(), 5.0)].into()),
         user: None,
     })?;
 
