@@ -30,17 +30,17 @@ impl Secrets {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct FinetuneInput {
+pub struct TrainingData {
     #[serde(default = "default_base_model")]
     pub base_model: String,
     pub sample: Vec<Sample>,
 }
 
 fn default_base_model() -> String {
-    "gpt-3.5-turbo".into()
+    "davinci".into()
 }
 
-impl FinetuneInput {
+impl TrainingData {
     pub fn builtin() -> Self {
         let res = toml::from_str(include_str!("default_finetune.toml"));
         match res {
@@ -77,7 +77,7 @@ impl FinetuneInput {
 pub struct Config {
     /// The fine-tuned model to use.
     /// Must be in our account.
-    pub model: String,
+    pub model_id: String,
 }
 
 impl Config {
@@ -93,7 +93,7 @@ impl Config {
 
     pub fn save(&self) -> anyhow::Result<()> {
         let base = BaseDirectories::with_prefix("refac")?;
-        let path = base.place_config_file("secrets.toml")?;
+        let path = base.place_config_file("config.toml")?;
         std::fs::write(path, toml::to_string(self)?)?;
         Ok(())
     }
@@ -105,6 +105,6 @@ mod tests {
 
     #[test]
     fn test_default_finetune_input() {
-        FinetuneInput::builtin();
+        TrainingData::builtin();
     }
 }

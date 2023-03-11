@@ -16,5 +16,8 @@ reqwest = { version = "0.11.14", features = ["blocking", "json", "multipart"] }
 rpassword = "7.2.0"
 serde = { version = "1.0.154", features = ["derive"] }
 serde_json = "1.0.94"
+tap = "1.0.1"
 toml = "0.7.2"
+tracing = "0.1.37"
+tracing-subscriber = "0.3.16"
 xdg = "2.4.1"

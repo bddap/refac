@@ -2,12 +2,15 @@ mod api;
 mod config_files;
 mod pretrain_sample;
 
+use std::time::Duration;
+
+use api::FinetuneInput;
 use clap::Parser;
 use config_files::Config;
 
 use crate::{
     api::Client,
-    config_files::{FinetuneInput, Secrets},
+    config_files::{Secrets, TrainingData},
 };
 
 #[derive(Parser)]
@@ -37,6 +40,7 @@ enum SubCommand {
 }
 
 fn main() {
+    tracing_subscriber::fmt::init();
     match run() {
         Ok(()) => {}
         Err(e) => {
@@ -59,16 +63,15 @@ fn run() -> anyhow::Result<()> {
         }
         SubCommand::Finetune => {
             let secrets = Secrets::load()?;
-            let fi = FinetuneInput::builtin();
-            let config = fine_tune(&secrets, &fi)?;
-            config.save()?;
+            let fi = TrainingData::builtin();
+            fine_tune(&secrets, &fi)?;
         }
         SubCommand::Tor {
             selected,
             transform,
         } => {
-            let secrets = Secrets::load()?;
-            let conf = Config::load()?;
+            let _secrets = Secrets::load()?;
+            let _conf = Config::load()?;
             dbg!(selected, transform);
             unimplemented!()
         }
@@ -77,13 +80,55 @@ fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn fine_tune(secret: &Secrets, fi: &FinetuneInput) -> anyhow::Result<Config> {
+fn fine_tune(secret: &Secrets, td: &TrainingData) -> anyhow::Result<()> {
     let c = Client::new(secret.openai_api_key.to_string());
 
-    let file_contents = fi.to_jsonl();
+    let file_contents = td.to_jsonl();
     let resp = c.upload("finetune.jsonl", file_contents.as_bytes())?;
-    // let result = c.fine_tune(resp.id, fi.base_model)?;
-    // dbg!(&resp);
+    tracing::info!("Uploaded training data.");
 
-    unimplemented!()
+    let fi = FinetuneInput {
+        training_file: resp.id,
+        validation_file: None,
+        model: Some(td.base_model.clone()),
+        n_epochs: None,
+        batch_size: None,
+        learning_rate_multiplier: None,
+        prompt_loss_weight: None,
+        compute_classification_metrics: None,
+        classification_n_classes: None,
+        classification_positive_class: None,
+        classification_betas: None,
+        suffix: Some("refac".to_string()),
+    };
+    let mut result = c.fine_tune(&fi)?;
+    tracing::info!("Started fine-tuning. Model ID: {}", result.id);
+
+    Config {
+        model_id: result.id.clone(),
+    }
+    .save()?;
+
+    loop {
+        tracing::info!("{}...", result.status);
+        tracing::debug!("{:#?}", result);
+        match result.status.as_str() {
+            "succeeded" => break,
+            "pending" | "running" => {
+                for _ in 0..10 {
+                    std::thread::sleep(Duration::from_secs(6));
+                    tracing::info!(".");
+                }
+            }
+            _ => {
+                Err(anyhow::anyhow!(
+                    "Finetuning status went to {}",
+                    &result.status
+                ))?;
+            }
+        }
+        result = c.get_fine_tune(&result.id)?;
+    }
+
+    Ok(())
 }
