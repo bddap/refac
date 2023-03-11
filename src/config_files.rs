@@ -31,12 +31,22 @@ impl Secrets {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct FinetuneInput {
+    #[serde(default = "default_base_model")]
+    pub base_model: String,
     pub sample: Vec<Sample>,
+}
+
+fn default_base_model() -> String {
+    "gpt-3.5-turbo".into()
 }
 
 impl FinetuneInput {
     pub fn builtin() -> Self {
-        toml::from_str(include_str!("default_finetune.toml")).unwrap()
+        let res = toml::from_str(include_str!("default_finetune.toml"));
+        match res {
+            Ok(v) => v,
+            Err(e) => panic!("Failed to parse default_finetune.toml: {}", e),
+        }
     }
 
     pub fn to_jsonl(&self) -> String {
@@ -86,5 +96,15 @@ impl Config {
         let path = base.place_config_file("secrets.toml")?;
         std::fs::write(path, toml::to_string(self)?)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_finetune_input() {
+        FinetuneInput::builtin();
     }
 }

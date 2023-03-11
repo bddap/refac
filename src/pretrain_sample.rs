@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 pub struct Sample {
     selected: String,
     transform: String,
-    result: String,
+    pub result: String,
     #[serde(
         default = "Correctness::correct",
         skip_serializing_if = "Correctness::is_correct"
