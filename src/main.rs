@@ -95,7 +95,7 @@ fn fine_tune(secret: &Secrets, td: &TrainingData) -> anyhow::Result<()> {
         validation_file: None,
         model: Some(td.base_model.clone()),
         n_epochs: None,
-        batch_size: None,
+        batch_size: Some(8),
         learning_rate_multiplier: None,
         prompt_loss_weight: None,
         compute_classification_metrics: None,

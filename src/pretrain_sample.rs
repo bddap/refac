@@ -25,10 +25,10 @@ impl Sample {
 
     pub fn prompt(&self) -> String {
         let prompt = serde_json::json!({
-            "selected_text": self.selected,
-            "transform": self.transform,
+            "original_text": self.selected,
+            "transformation_instructions": self.transform,
         });
-        serde_json::to_string(&prompt).unwrap()
+        serde_json::to_string(&prompt).unwrap() + "\nimproved_text: "
     }
 
     pub fn completion(&self) -> &str {
