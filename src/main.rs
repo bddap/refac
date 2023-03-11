@@ -1,6 +1,7 @@
 mod api;
 mod config_files;
 mod pretrain_sample;
+mod tokenizer;
 
 use std::time::Duration;
 
@@ -9,8 +10,10 @@ use clap::Parser;
 use config_files::Config;
 
 use crate::{
-    api::Client,
+    api::{Client, CompletionRequest},
     config_files::{Secrets, TrainingData},
+    pretrain_sample::Sample,
+    tokenizer::count_tokens,
 };
 
 #[derive(Parser)]
@@ -70,10 +73,10 @@ fn run() -> anyhow::Result<()> {
             selected,
             transform,
         } => {
-            let _secrets = Secrets::load()?;
-            let _conf = Config::load()?;
-            dbg!(selected, transform);
-            unimplemented!()
+            let secrets = Secrets::load()?;
+            let conf = Config::load()?;
+            let completion = refactor(&selected, &transform, &secrets, &conf)?;
+            println!("{}", completion);
         }
     };
 
@@ -104,11 +107,6 @@ fn fine_tune(secret: &Secrets, td: &TrainingData) -> anyhow::Result<()> {
     let mut result = c.fine_tune(&fi)?;
     tracing::info!("Started fine-tuning. Model ID: {}", result.id);
 
-    Config {
-        model_id: result.id.clone(),
-    }
-    .save()?;
-
     loop {
         tracing::info!("{}...", result.status);
         tracing::debug!("{:#?}", result);
@@ -130,5 +128,56 @@ fn fine_tune(secret: &Secrets, td: &TrainingData) -> anyhow::Result<()> {
         result = c.get_fine_tune(&result.id)?;
     }
 
+    let model_id = result.fine_tuned_model.ok_or(anyhow::anyhow!(
+        "Fine-tuning succeeded but no model ID was returned."
+    ))?;
+    Config { model_id }.save()?;
+
     Ok(())
+}
+
+fn refactor(
+    selected: &str,
+    transform: &str,
+    sc: &Secrets,
+    conf: &Config,
+) -> anyhow::Result<String> {
+    // Different models have different max tokens so this we'll need to not hardcode
+    // this if we want to support other models the current generation of fine-tuneable
+    // models are all 2049?
+    const MAX_TOKENS: usize = 2049;
+
+    let c = Client::new(sc.openai_api_key.to_string());
+    let prompt = Sample::prompt_for(selected, transform);
+
+    let rest = MAX_TOKENS
+        .checked_sub(count_tokens(&prompt))
+        .ok_or_else(|| anyhow::anyhow!("that prompt is probably too long"))?;
+
+    let resp = c.complete(&CompletionRequest {
+        model: conf.model_id.clone(),
+        max_tokens: Some(rest),
+        prompt,
+        temperature: None,
+        top_p: None,
+        n: None,
+        stream: None,
+        logprobs: None,
+        echo: None,
+        stop: None,
+        presence_penalty: None,
+        frequency_penalty: None,
+        best_of: None,
+        logit_bias: None,
+        user: None,
+    })?;
+
+    let completion = resp
+        .choices
+        .get(0)
+        .ok_or_else(|| anyhow::anyhow!("the api didn't provide any completions"))?
+        .text
+        .to_string();
+
+    Ok(completion)
 }

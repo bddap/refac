@@ -37,6 +37,11 @@ pub struct TrainingData {
 }
 
 fn default_base_model() -> String {
+    // As of this writing davinci, curie, ada, and babbage are the only models available
+    // for fine-tuning.
+    // https://platform.openai.com/docs/models/gpt-3
+    //
+    // If the gpt3.5 become available for fine-tuning, this default should be changed.
     "davinci".into()
 }
 

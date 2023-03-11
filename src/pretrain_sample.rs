@@ -13,6 +13,16 @@ pub struct Sample {
 }
 
 impl Sample {
+    pub fn prompt_for(selected: &str, transform: &str) -> String {
+        Sample {
+            selected: selected.to_string(),
+            transform: transform.to_string(),
+            result: String::new(),
+            correct: Correctness::correct(),
+        }
+        .prompt()
+    }
+
     pub fn prompt(&self) -> String {
         let prompt = serde_json::json!({
             "selected_text": self.selected,

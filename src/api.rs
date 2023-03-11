@@ -1,4 +1,4 @@
-use std::io::Cursor;
+use std::{collections::HashMap, io::Cursor};
 
 use reqwest::blocking::multipart::{Form, Part};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -93,6 +93,63 @@ pub struct FineTuneFile {
     pub purpose: String,
 }
 
+#[derive(Serialize, Debug)]
+pub struct CompletionRequest {
+    pub model: String,
+    pub prompt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub n: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logprobs: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub echo: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub best_of: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logit_bias: Option<HashMap<String, f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct CompletionResponse {
+    pub id: String,
+    pub object: String,
+    pub created: usize,
+    pub model: String,
+    pub choices: Vec<CompletionChoice>,
+    pub usage: CompletionUsage,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct CompletionChoice {
+    pub text: String,
+    pub index: usize,
+    pub logprobs: Option<Value>,
+    pub finish_reason: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct CompletionUsage {
+    pub prompt_tokens: usize,
+    pub completion_tokens: usize,
+    pub total_tokens: usize,
+}
+
 fn form_part_file(filename: &str, file_content: &[u8]) -> Part {
     let reader = Cursor::new(file_content.to_vec());
     Part::reader(reader).file_name(filename.to_string())
@@ -149,6 +206,18 @@ impl Client {
             .send()?
             .pipe(err_with_body)?
             .json::<FineTuneResponse>()?;
+        Ok(resp)
+    }
+
+    pub fn complete(&self, input: &CompletionRequest) -> anyhow::Result<CompletionResponse> {
+        let resp = self
+            .client
+            .post("https://api.openai.com/v1/completions")
+            .header("Authorization", self.auth())
+            .json(&input)
+            .send()?
+            .pipe(err_with_body)?
+            .pipe(try_json)?;
         Ok(resp)
     }
 }
