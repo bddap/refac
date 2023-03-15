@@ -10,7 +10,6 @@ readme = "README.md"
 categories = [
   "command-line-utilities",
   "text-processing",
-  "natural-language-processing",
   "text-editors"
 ]
 repository = "https://github.com/bddap/refac"
