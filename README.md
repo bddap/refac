@@ -1,3 +1,5 @@
+[![Crate](https://img.shields.io/crates/v/refac.svg)](https://crates.io/crates/refac)
+
 # refac: Automatically edit text.
 
 The workflow:
@@ -9,15 +11,20 @@ This tool calls the openai api `edits` endpoint. You'll need your own api key to
 Use `refac login` to enter your api key. It will be saved in your home directory
 for future use.
 
-## Installation
+This tool uses your openai account so usage is not exactly free. I've paid a total of $0.04
+today while developing this tool.
 
-This tool can be install using cargo.
+## Setup
 
 ```bash
+# This tool can be installed using cargo.
 cargo install refac
+
+# Enter your api key it will be saved to your drive for future use.
+refac login
 ```
 
-Then try it out:
+## Try it out
 
 ```bash
 > refac tor 'The quick brown fox jumps over the lazy dog.' 'convert to all caps'
@@ -103,12 +110,43 @@ Thanks,
 [Your Name]
 ```
 
-## Using refac from your favorite editor
+## Using Refac From Your Favorite Text Editor
+
+First, make sure you have:
+- [ ] installed refac
+- [ ] entered your [api key](https://platform.openai.com/account/api-keys) using `refac login`
 
 ### Emacs
 
+After installing and logging in add this chunk of flim-flam to your init.el:
+
 ```elisp
-TODO
+(defun refac (start end)
+  (interactive "r")
+  (let* ((selected-text
+          (buffer-substring-no-properties
+           start
+           end))
+         (transform (read-string "Enter transformation instruction: "))
+         (refac-executable (executable-find "refac")))
+    (if refac-executable (progn (let (result exit-status)
+                                  (with-temp-buffer
+                                    (setq exit-status (call-process refac-executable nil t nil "tor" selected-text
+                                                                    transform))
+                                    (setq result (buffer-string)))
+                                  (if (zerop exit-status)
+                                      (progn (delete-region start end)
+                                             (insert result))
+                                    (message "refac returned a non-zero exit status: %d. Error: %s" exit-status
+                                             result))))
+      (error
+       "refac executable not found"))))
+```
+
+And bind the function to a key if you like that sort of thing.
+
+```elisp
+(global-set-key (kbd "C-c r") 'refac)
 ```
 
 ### Not Emacs

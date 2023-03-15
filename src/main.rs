@@ -14,15 +14,12 @@ struct Opts {
     subcmd: SubCommand,
 }
 
-// TODO:
-//   Just to login automatically when the user runs the program
-//   for the first time.
 #[derive(Parser)]
 enum SubCommand {
     /// Save your openai api key for future use.
     Login,
-    /// Get it? 'refac tor'. Perform inference.
-    /// If no subcommand is provided, this is the default.
+    /// Apply the instructions encoded in `transform` to the text in `selected`.
+    /// Get it? 'refac tor'
     Tor { selected: String, transform: String },
 }
 
@@ -42,7 +39,8 @@ fn run() -> anyhow::Result<()> {
 
     match opts.subcmd {
         SubCommand::Login => {
-            let api_key = rpassword::prompt_password("Enter your OpenAI API key: ")?;
+            println!("https://platform.openai.com/account/api-keys");
+            let api_key = rpassword::prompt_password("Enter your OpenAI API key:")?;
             Secrets {
                 openai_api_key: api_key,
             }
