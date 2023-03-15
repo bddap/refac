@@ -1,6 +1,6 @@
 [package]
 name = "refac"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = """
 Transform some text given a generic natural language prompt.

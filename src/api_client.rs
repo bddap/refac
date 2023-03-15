@@ -83,22 +83,21 @@ impl Client {
             .send()
             .context("Failed to send request to API")?;
 
-        if !response.status().is_success() {
-            return Err(anyhow::anyhow!(
-                "Request failed with status code: {}",
-                response.status()
-            ));
+        let status = response.status();
+        let body = response
+            .json::<Value>()
+            .with_context(|| anyhow::anyhow!("Status: {status}. Failed to parse response body."))?;
+        let body_pretty = serde_json::to_string_pretty(&body).unwrap();
+
+        if !status.is_success() {
+            return Err(anyhow::anyhow!("Status: {}. Body: {}", status, body_pretty));
         }
 
-        let response_json = response
-            .json::<Value>()
-            .context("Failed to read response body as json")?;
-
-        serde_json::from_value::<E::Response>(response_json.clone()).map_err(|e| {
+        serde_json::from_value::<E::Response>(body).map_err(|e| {
             anyhow::anyhow!(
-                "Error: {} while parsing response: {}",
+                "Error while parsing response: {} Body: {}",
                 e,
-                serde_json::to_string_pretty(&response_json).unwrap()
+                body_pretty
             )
         })
     }
