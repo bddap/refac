@@ -1,17 +1,31 @@
 mod api;
 mod api_client;
 mod config_files;
+mod prompt;
 
-use api::{EditRequest, EditResponse};
+use anyhow::Context;
+use api::{ChatCompletionRequest, ChatCompletionResponse};
 use api_client::Client;
 use clap::Parser;
 use config_files::Secrets;
+use serde::{Deserialize, Serialize};
+use std::{
+    fs::{create_dir_all, OpenOptions},
+    io::Write,
+    path::PathBuf,
+};
+use xdg::BaseDirectories;
+
+use crate::{api::Message, prompt::chat_prefix};
 
 #[derive(Parser)]
 #[clap(version, author, about)]
 struct Opts {
     #[clap(subcommand)]
     subcmd: SubCommand,
+    #[clap(long, default_value = "false")]
+    /// Slightly modify refac's personality.
+    sass: bool,
 }
 
 #[derive(Parser)]
@@ -28,7 +42,7 @@ fn main() {
     match run() {
         Ok(()) => {}
         Err(e) => {
-            eprintln!("{}", e);
+            eprintln!("{:?}", e);
             std::process::exit(1);
         }
     }
@@ -51,7 +65,7 @@ fn run() -> anyhow::Result<()> {
             transform,
         } => {
             let secrets = Secrets::load()?;
-            let completion = refactor(selected, transform, &secrets)?;
+            let completion = refactor(selected, transform, &secrets, opts.sass)?;
             print!("{}", completion);
         }
     };
@@ -59,28 +73,76 @@ fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn refactor(selected: String, transform: String, sc: &Secrets) -> anyhow::Result<String> {
-    let c = Client::new(&sc.openai_api_key);
+fn refactor(
+    selected: String,
+    transform: String,
+    sc: &Secrets,
+    sassy: bool,
+) -> anyhow::Result<String> {
+    let client = Client::new(&sc.openai_api_key);
+    let mut messages = chat_prefix(sassy);
+    messages.push(Message::user(selected));
+    messages.push(Message::user(transform));
 
-    let req = EditRequest {
-        model: "text-davinci-edit-001".into(),
-        input: Some(selected),
-        instruction: transform,
-        n: None,
+    let request = ChatCompletionRequest {
+        model: "gpt-4".into(), // don't have access to "gpt-4-32k" yet
+        messages,
         temperature: None,
         top_p: None,
+        n: None,
+        stream: None,
+        stop: None,
+        max_tokens: None,
+        presence_penalty: None,
+        frequency_penalty: None,
+        logit_bias: None,
+        user: None,
     };
 
-    let resp: EditResponse = c.request(&req)?;
+    let response = client.request(&request)?;
 
-    tracing::debug!("Token {:?}", resp.usage);
+    LogEntry {
+        inp: request,
+        res: response.clone(),
+    }
+    .log()
+    .context("failed to log")?;
 
-    let completion = resp
+    let result = response
         .choices
         .into_iter()
         .next()
         .ok_or(anyhow::anyhow!("No choices returned."))?
-        .text;
+        .message
+        .content;
 
-    Ok(completion)
+    Ok(result)
+}
+
+fn log_location() -> anyhow::Result<PathBuf> {
+    let ret = BaseDirectories::with_prefix("refac")?.get_data_file("logs.jsonl");
+
+    // ensure the parent directory exists
+    ret.parent().map(create_dir_all).transpose()?;
+
+    Ok(ret)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct LogEntry {
+    inp: ChatCompletionRequest,
+    res: ChatCompletionResponse,
+}
+
+impl LogEntry {
+    fn log(&self) -> anyhow::Result<()> {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_location()?)
+            .context("opening log file")?;
+        let line = serde_json::to_string(self)?;
+        writeln!(file, "{}", line)?;
+        Ok(())
+    }
 }
