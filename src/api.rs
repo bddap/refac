@@ -71,7 +71,7 @@ pub struct Usage {
     /// The number of tokens used for the prompt.
     pub prompt_tokens: u32,
     /// The number of tokens used for the completion.
-    pub completion_tokens: u32,
+    pub completion_tokens: Option<u32>,
     /// The total number of tokens used.
     pub total_tokens: u32,
 }

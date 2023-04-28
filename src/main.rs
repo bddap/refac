@@ -18,7 +18,10 @@ use std::{
 };
 use xdg::BaseDirectories;
 
-use crate::{api::Message, prompt::chat_prefix};
+use crate::{
+    api::Message,
+    prompt::{chat_prefix, fuzzy_undiff},
+};
 
 #[derive(Parser)]
 #[clap(version, author, about)]
@@ -122,7 +125,10 @@ fn refactor(
 
     tracing::debug!("diff: \n{}", diff);
 
-    let result = undiff(&selected, &diff)?;
+    let result = match undiff(&selected, &diff) {
+        Ok(new) => new,
+        Err(_) => fuzzy_undiff(&selected, &diff, &client)?,
+    };
 
     Ok(result)
 }
