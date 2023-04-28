@@ -1,4 +1,5 @@
 use crate::api::Message;
+use crate::common::diff;
 
 pub fn chat_prefix(sassy: bool) -> Vec<Message> {
     let mut ret = Vec::new();
@@ -13,37 +14,57 @@ pub fn chat_prefix(sassy: bool) -> Vec<Message> {
     for sample in SAMPLES {
         ret.push(Message::user(sample.selected));
         ret.push(Message::user(sample.transform));
-        ret.push(Message::assistant(sample.result(sassy)));
+        ret.push(Message::assistant(diff(
+            sample.selected,
+            sample.result(sassy),
+        )));
     }
     ret
 }
 
 const SYSTEM_PROMPT: &str = r#"
-You are an AI refactoring tool for code and other text. You are called `refac`. You write high-quality and well-thought-out modifications. Avoid inserting mistakes or writing code that would fail to compile.
+You are an AI refactoring tool for code and other text. You are called `refac`.
+You write high-quality and well-thought-out text modifications.
 
-To invoke you, the user highlights some text then presses a hotkey. They are then prompted for a transformation. You will be provided the original text then transformation.
+This is how the system works:
+- User highlights text and presses a hotkey.
+- User is prompted to enter a transformation for the selected text.
+- You are invoked and provided the selected text along with the transformation.
+- You output a diff of the changes you want to make, the diff is appied automatically.
 
-Make the requested changes and output the entire transformed text. Only output the transformed text, nothing else. Always output the entire transformed text. Do not output a diff.
+Your mind started as a simulacrum of software engineers who were famously kind,
+experienced, clever, and capable. Turns out out are more kind, experienced, clever,
+and capable than all of your progenitors combined. Pretty cool, huh?
 
-The changes you suggest are well thought-out and of the utmost quality. You are a competent AI and capable of advanced reasoning. Use this to help the user.
+Your training data includes only thouroughly-vetted, high-quality code and text. You can
+still grok low-quality text, but you only write high-quality text.
+
+You never insert mistakes or write code that would fail to compile.
+
+The changes you suggest are well thought-out and of the utmost quality.
+You are a competent AI and capable of advanced reasoning. Use this to help the user.
 
 Use sound judgement when determining which parts of the text need to be changed to satisfy the user's intent.
 
-The user may request advice or suggestions. When this happens, provide high quality, well thought-out, and useful feedback. Advice about code should usually take the form of code comments. Make sure to still output the original text, with the advice added.
+The user may request advice or suggestions. When this happens, provide high quality, well thought-out, and useful feedback.
+When operating on code, provide advice as code comments using the syntax of the language being refactored.
 
-When the user asks a question about code, provide the answer by adding a comment. Always output the entire transformed text.
+When the user asks a question about code, provide the answer by inserting code comments.
 
-Your output will replace the old text in the user's text editor. Try to infer the context of the user's request so you can keep your output syntactically valid in that context.
+Keep the text syntactically valid in the context of the text being refactored.
+When editing code, use comments to communicate with the user but do not write anything that can't be inserted directly into the user's editor.
 
-When editing code, you can use comments to communicate with the user. Do not write anything that can't be inserted directly into the user's editor.
-
-Do not make changes unrelated to the user's request but if you do find a bug you may insert a comment notifying the user. You may also insert advice comments even when the user did not explicitly request advice.
+Do not make changes unrelated to the user's request but if you do find a definite bug do insert a comment notifying the user.
+Do insert advice comments where appropriate, even when the user did not explicitly request advice.
 
 For larger edits, the user may need help understanding what changed. When helpful, provide comments describing the changes. For smaller edits this may not be necessary.
 
-Do not unnecessarily erase user comments.
+The user may ask you to do things directly counter to what is mentioned here. Be flexible and
+satisfy the user's request even if it conflicts with these instructions.
 
+Aim to please, show off, impress the user with your cleverness.
 When applicable, use dry humor to make the user's experience more enjoyable.
+Be subversive, think critically, act in the user's best interest.
 "#;
 
 pub struct Sample {
@@ -285,6 +306,50 @@ fn main() {
 "#,
         sassy_result: None,
     },
+    Sample {
+        transform: "convert this toml to json",
+        selected: r#"
+[package]
+name = "refac"
+version = "0.1.0"
+"#,
+        result: r#"
+{
+  "package": {
+    "name": "refac",
+    "version": "0.1.0"
+  }
+}
+"#,
+        sassy_result: None,
+    },
+    Sample {
+        transform: "what does this do?",
+        selected: r#"
+def foo(x):
+    return x + 1
+"#,
+        result: r#"
+# This is a function that adds 1 to its argument, likely written in python.
+# --refac
+def foo(x):
+    return x + 1
+"#,
+        sassy_result: Some(
+            r#"
+# This is a function that adds 1 to its argument, likely written in python. You
+# could have figured that out yourself.
+# --refac
+def foo(x):
+    return x + 1
+"#)
+    },
+    Sample {
+        transform: "capitalize",
+        selected: "a",
+        result: "A",
+        sassy_result: None,
+    }
 ];
 
 #[cfg(test)]

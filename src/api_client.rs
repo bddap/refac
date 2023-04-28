@@ -94,11 +94,7 @@ impl Client {
         }
 
         serde_json::from_value::<E::Response>(body).map_err(|e| {
-            anyhow::anyhow!(
-                "Error while parsing response: {} Body: {}",
-                e,
-                body_pretty
-            )
+            anyhow::anyhow!("Error while parsing response: {} Body: {}", e, body_pretty)
         })
     }
 }

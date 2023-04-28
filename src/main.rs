@@ -1,5 +1,6 @@
 mod api;
 mod api_client;
+mod common;
 mod config_files;
 mod prompt;
 
@@ -7,6 +8,7 @@ use anyhow::Context;
 use api::{ChatCompletionRequest, ChatCompletionResponse};
 use api_client::Client;
 use clap::Parser;
+use common::undiff;
 use config_files::Secrets;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -81,7 +83,7 @@ fn refactor(
 ) -> anyhow::Result<String> {
     let client = Client::new(&sc.openai_api_key);
     let mut messages = chat_prefix(sassy);
-    messages.push(Message::user(selected));
+    messages.push(Message::user(&selected));
     messages.push(Message::user(transform));
 
     let request = ChatCompletionRequest {
@@ -108,13 +110,19 @@ fn refactor(
     .log()
     .context("failed to log")?;
 
-    let result = response
+    tracing::debug!("response: {}", serde_json::to_string(&response).unwrap());
+
+    let diff = response
         .choices
         .into_iter()
         .next()
         .ok_or(anyhow::anyhow!("No choices returned."))?
         .message
         .content;
+
+    tracing::debug!("diff: \n{}", diff);
+
+    let result = undiff(&selected, &diff)?;
 
     Ok(result)
 }
