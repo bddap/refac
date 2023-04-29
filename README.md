@@ -7,7 +7,7 @@ The workflow:
 - Run the command, write instructions on what you want changed.
 - Never edit text directly again.
 
-This tool calls the openai api `edits` endpoint. You'll need your own api key to use it.
+This tool calls the openai api. You'll need your own api key to use it.
 Use `refac login` to enter your api key. It will be saved in your home directory
 for future use.
 
