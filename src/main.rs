@@ -127,7 +127,11 @@ fn refactor(
 
     let result = match undiff(&selected, &diff) {
         Ok(new) => new,
-        Err(_) => fuzzy_undiff(&selected, &diff, &client)?,
+        Err(_) => {
+            // fallback to fuzzy undiff, include the diff in the output
+            let r = fuzzy_undiff(&selected, &diff, &client, "gpt-3.5-turbo")?;
+            format!("{}\n{}", diff, r)
+        }
     };
 
     Ok(result)

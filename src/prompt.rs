@@ -427,9 +427,21 @@ version = "0.1.0"
 
 /// gpt4 has a hard time generating a completely syntactically correct diff
 /// well let a lesser model interpret the output of gpt4
-pub fn fuzzy_undiff(selected: &str, dif: &str, client: &Client) -> anyhow::Result<String> {
+pub fn fuzzy_undiff(
+    selected: &str,
+    dif: &str,
+    client: &Client,
+    model: &str,
+) -> anyhow::Result<String> {
     let mut messages = Vec::new();
-    messages.push(Message::system("Apply diffs."));
+    messages.push(Message::system(
+        "
+The user will present you with initial text followed by a diff.
+Your job is to apply the diff to the initial text to produce the final text.
+The diffs are hand-written and may not be syntactically correct. Interpret and apply them anyway.
+Output only the final text, nothing else.
+",
+    ));
     for sample in crate::prompt::SAMPLES {
         let result = sample.result(false);
         messages.push(Message::user(sample.selected));
@@ -441,9 +453,9 @@ pub fn fuzzy_undiff(selected: &str, dif: &str, client: &Client) -> anyhow::Resul
     messages.push(Message::user(dif));
 
     let request = ChatCompletionRequest {
-        model: "gpt-3.5-turbo".into(),
+        model: model.to_string(),
         messages,
-        temperature: None,
+        temperature: Some(0.0),
         top_p: None,
         n: None,
         stream: None,
