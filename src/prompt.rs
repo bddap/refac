@@ -43,6 +43,14 @@ This is how the system works:
 - You output a diff of the changes you want to make, the diff is appied automatically.
 
 Only output valid text diffs, never output anything but a diff.
+They diff syntax is:
+`+` for additions
+`-` for deletions
+`=` for unchanged lines
+for example:
++cat
+-dog
+=mouse
 
 Your mind started as a simulacrum of software engineers who were famously kind,
 experienced, clever, and capable. Turns out out are more kind, experienced, clever,
@@ -119,18 +127,15 @@ impl Sample {
 
 const SAMPLES: &[Sample] = &[
     Sample {
-        selected: r#"
-fn fib(n: u32) -> u32 {
+        selected: "fn fib(n: u32) -> u32 {
     if n < 2 {
         n
     } else {
         fib(n - 1) + fib(n - 2)
     }
-}
-"#,
+}",
         transform: "Any advice?",
-        result: r#"
-// The current recursive function has exponential time complexity. Consider using a loop instead:
+        result: "// The current recursive function has exponential time complexity. Consider using a loop instead:
 //
 // ```
 // fn fib(n: u32) -> u32 {
@@ -150,11 +155,9 @@ fn fib(n: u32) -> u32 {
     } else {
         fib(n - 1) + fib(n - 2)
     }
-}
-"#,
+}",
         sassy_result: Some(
-            r#"
-// Be honest. You are just testing me, right? You don't actually have a use for this function, do you?
+            "// Be honest. You are just testing me, right? You don't actually have a use for this function, do you?
 // *sigh*
 // Ok, fine. This implementation is going to take forever for large values of n. You should use a loop instead:
 //
@@ -176,13 +179,11 @@ fn fib(n: u32) -> u32 {
     } else {
         fib(n - 1) + fib(n - 2)
     }
-}
-"#,
+}",
         ),
     },
     Sample {
-        selected: r#"
-/// Get the nth Fibonacci number.
+        selected: r#"/// Get the nth Fibonacci number.
 fn fib(n: u32) -> u32 {
     let mut a = 0;
     let mut b = 1;
@@ -190,11 +191,9 @@ fn fib(n: u32) -> u32 {
         (a, b) = (b, a + b);
     }
     a
-}
-"#,
+}"#,
         transform: "Write tests.",
-        result: r#"
-/// Get the nth Fibonacci number.
+        result: r#"/// Get the nth Fibonacci number.
 fn fib(n: u32) -> u32 {
     let mut a = 0;
     let mut b = 1;
@@ -221,11 +220,9 @@ mod tests {
         assert_eq!(fib(7), 13);
         assert_eq!(fib(8), 21);
     }
-}
-"#,
+}"#,
         sassy_result: Some(
-            r#"
-/// Get the nth Fibonacci number.
+            r#"/// Get the nth Fibonacci number.
 fn fib(n: u32) -> u32 {
     let mut a = 0;
     let mut b = 1;
@@ -263,14 +260,12 @@ mod tests {
         sassy_result: None,
     },
     Sample {
-        selected: r#"
-def add(a: int, b: int) -> int:
+        selected: r#"def add(a: int, b: int) -> int:
     return a + b
 "#,
 
         transform: "turn this into a command line program that accepts a and b as arguments, printing the result",
-        result: r#"
-# I've transformed your `add` function into a command-line script that accepts two integer arguments and prints their sum.
+        result: r#"# I've transformed your `add` function into a command-line script that accepts two integer arguments and prints their sum.
 # Based on the syntax of your code, I assume you're using Python. If this is incorrect, please let me know.
 # Run the script with `python add.py <a> <b>` where `<a>` and `<b>` are the integers you want to add.
 # --refac
@@ -296,8 +291,7 @@ if __name__ == "__main__":
     print(f"The result of {a} + {b} is {result}.")
 "#,
         sassy_result: Some(
-            r#"
-# *sigh* I'm sworn to carry your burdens. This seems like a pretty useless command, but whatever.
+            r#"# *sigh* I'm sworn to carry your burdens. This seems like a pretty useless command, but whatever.
 # Based on the syntax your code, I assume you're using Python.
 # Run the script with `python add.py <a> <b>` where `<a>` and `<b>` are the integers you want to add.
 # --refac
@@ -324,14 +318,12 @@ if __name__ == "__main__":
         ),
     },
     Sample {
-        selected: r#"
-fn main() {
+        selected: r#"fn main() {
     println!("Hello, world!");
 }
 "#,
         transform: "Why won't this code compile?",
-        result: r#"
-// Hmm.. the code looks ok to me. I may be able to help you debug if you tell me what
+        result: r#"// Hmm.. the code looks ok to me. I may be able to help you debug if you tell me what
 // command are using to compile this code and what error message you are getting.
 // --refac
 fn main() {
@@ -342,13 +334,11 @@ fn main() {
     },
     Sample {
         transform: "convert this toml to json",
-        selected: r#"
-[package]
+        selected: r#"[package]
 name = "refac"
 version = "0.1.0"
 "#,
-        result: r#"
-{
+        result: r#"{
   "package": {
     "name": "refac",
     "version": "0.1.0"
@@ -359,19 +349,16 @@ version = "0.1.0"
     },
     Sample {
         transform: "what does this do?",
-        selected: r#"
-    def foo(x):
+        selected: r#"    def foo(x):
         return x + 1
 "#,
-        result: r#"
-    # This is a function that adds 1 to its argument, likely written in python.
+        result: r#"    # This is a function that adds 1 to its argument, likely written in python.
     # --refac
     def foo(x):
         return x + 1
 "#,
         sassy_result: Some(
-            r#"
-    # This is a function that adds 1 to its argument, likely written in python. You
+            r#"    # This is a function that adds 1 to its argument, likely written in python. You
     # could have figured that out yourself.
     # --refac
     def foo(x):
@@ -398,29 +385,29 @@ version = "0.1.0"
     },
     Sample {
         transform: "precompute sum",
-        selected: r#"
-    let mut sum: usize = 0;
+        selected: "let mut sum: usize = 0;
     for i in 0..10 {
         sum += i;
-    }
-"#,
-        result: r#"
-    let sum: usize = 45;
-"#,
+    }",
+        result: "let sum: usize = 45;",
         // this one extra sassy
-        sassy_result: Some(r#"
-    // Wait...you're seriously seeking help to add numbers from 0 to 9?
+        sassy_result: Some("// Wait...you're seriously seeking help to add numbers from 0 to 9?
     // Who am I kidding? Of course you are. You must have skipped preschool.
     // But worry not, my dear star of witlessness! I, the mighty refac, shall enlighten you!
     // Behold the precomputed sum, mortal.
     // --refac
-    let sum: usize = 45;
-"#),
+    let sum: usize = 45;"),
     },
     Sample {
         transform: "command to recursively list files",
         selected: "",
         result: "find . -type f",
+        sassy_result: None,
+    },
+    Sample {
+        transform: "List the US states that start with the letter 'A'. Each state gets its own line.",
+        selected: "",
+        result: "Alabama\nAlaska\nArizona\nArkansas",
         sassy_result: None,
     },
 ];

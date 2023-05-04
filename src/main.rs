@@ -15,6 +15,7 @@ use std::{
     fs::{create_dir_all, OpenOptions},
     io::Write,
     path::PathBuf,
+    sync::Once,
 };
 use xdg::BaseDirectories;
 
@@ -22,7 +23,6 @@ use crate::{
     api::Message,
     prompt::{chat_prefix, fuzzy_undiff},
 };
-
 #[derive(Parser)]
 #[clap(version, author, about)]
 struct Opts {
@@ -87,7 +87,7 @@ fn refactor(
     let client = Client::new(&sc.openai_api_key);
     let mut messages = chat_prefix(sassy);
     messages.push(Message::user(&selected));
-    messages.push(Message::user(transform));
+    messages.push(Message::user(&transform));
 
     let request = ChatCompletionRequest {
         model: "gpt-4".into(), // don't have access to "gpt-4-32k" yet
@@ -106,12 +106,13 @@ fn refactor(
 
     let response = client.request(&request)?;
 
-    LogEntry {
-        inp: request,
-        res: response.clone(),
-    }
-    .log()
-    .context("failed to log")?;
+    log(
+        LogEntry {
+            inp: request,
+            res: response.clone(),
+        },
+        "logs",
+    )?;
 
     tracing::debug!("response: {}", serde_json::to_string(&response).unwrap());
 
@@ -127,14 +128,31 @@ fn refactor(
 
     let result = match undiff(&selected, &diff) {
         Ok(new) => new,
-        Err(_) => fuzzy_undiff(&selected, &diff, &client, "gpt-3.5-turbo")?,
+        Err(err) => {
+            log(
+                UndiffFailure {
+                    selected: selected.clone(),
+                    diff: diff.clone(),
+                    transform,
+                    err: err.to_string(),
+                },
+                "undiff_failure",
+            )?;
+            fuzzy_undiff(&selected, &diff, &client, "gpt-3.5-turbo")?
+        }
     };
 
     Ok(result)
 }
 
-fn log_location() -> anyhow::Result<PathBuf> {
-    let ret = BaseDirectories::with_prefix("refac")?.get_data_file("logs.jsonl");
+fn log_location(title: &str) -> anyhow::Result<PathBuf> {
+    let bd = BaseDirectories::with_prefix("refac")?;
+    let ret = bd.get_data_file(format!("{title}.jsonl"));
+
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        tracing::debug!("Logging to {:?}", bd.get_data_home());
+    });
 
     // ensure the parent directory exists
     ret.parent().map(create_dir_all).transpose()?;
@@ -148,15 +166,25 @@ struct LogEntry {
     res: ChatCompletionResponse,
 }
 
-impl LogEntry {
-    fn log(&self) -> anyhow::Result<()> {
+#[derive(Debug, Serialize, Deserialize)]
+struct UndiffFailure {
+    selected: String,
+    diff: String,
+    transform: String,
+    err: String,
+}
+
+fn log<T: Serialize>(t: T, title: &str) -> anyhow::Result<()> {
+    fn inner<T: Serialize>(t: T, title: &str) -> anyhow::Result<()> {
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(log_location()?)
+            .open(log_location(title)?)
             .context("opening log file")?;
-        let line = serde_json::to_string(self)?;
+        let line = serde_json::to_string(&t)?;
         writeln!(file, "{}", line)?;
         Ok(())
     }
+
+    inner(t, title).with_context(|| format!("failed to log {}", title))
 }
