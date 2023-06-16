@@ -3,6 +3,8 @@ use similar::ChangeTag;
 
 #[cfg(test)]
 fn diff_inner(selected: &str, result: &str, algo: similar::Algorithm) -> String {
+    use similar::TextDiff;
+
     let selected: Vec<&str> = selected.split('\n').collect();
     let result: Vec<&str> = result.split('\n').collect();
 
