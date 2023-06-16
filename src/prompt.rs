@@ -476,6 +476,7 @@ Output only the final text, nothing else.
         frequency_penalty: None,
         logit_bias: None,
         user: None,
+        functions: None,
     };
 
     let response = client.request(&request)?;
@@ -486,7 +487,8 @@ Output only the final text, nothing else.
         .next()
         .ok_or(anyhow::anyhow!("No choices returned."))?
         .message
-        .content;
+        .try_into_assistant_content()
+        .ok_or(anyhow::anyhow!("Assistant tried to call a function."))?;
 
     Ok(diff)
 }

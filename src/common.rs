@@ -198,13 +198,4 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
             }
         }
     }
-
-    #[test]
-    #[ignore]
-    fn long_text_short_diff() {
-        let from = include_str!("common.rs");
-        let to = include_str!("common.rs");
-        let diff = diff(from, to);
-        assert_eq!(diff, "");
-    }
 }

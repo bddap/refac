@@ -2,6 +2,7 @@ mod api;
 mod api_client;
 mod common;
 mod config_files;
+mod powers;
 mod prompt;
 
 use anyhow::Context;
@@ -94,6 +95,7 @@ fn refactor(selected: String, transform: String, sc: &Secrets) -> anyhow::Result
         frequency_penalty: None,
         logit_bias: None,
         user: None,
+        functions: None,
     };
 
     let response = client.request(&request)?;
@@ -114,7 +116,8 @@ fn refactor(selected: String, transform: String, sc: &Secrets) -> anyhow::Result
         .next()
         .ok_or(anyhow::anyhow!("No choices returned."))?
         .message
-        .content;
+        .try_into_assistant_content()
+        .ok_or(anyhow::anyhow!("Assistant tried to call a function."))?;
 
     tracing::debug!("diff: \n{}", diff);
 
