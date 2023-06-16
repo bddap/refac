@@ -1,6 +1,7 @@
 use anyhow::anyhow as ah;
-use similar::{ChangeTag, TextDiff};
+use similar::ChangeTag;
 
+#[cfg(test)]
 fn diff_inner(selected: &str, result: &str, algo: similar::Algorithm) -> String {
     let selected: Vec<&str> = selected.split('\n').collect();
     let result: Vec<&str> = result.split('\n').collect();
@@ -14,17 +15,17 @@ fn diff_inner(selected: &str, result: &str, algo: similar::Algorithm) -> String 
     for change in diff.iter_all_changes() {
         match change.tag() {
             ChangeTag::Delete => {
-                output += "-";
+                output += "delete ";
                 output += change.value();
                 output += "\n";
             }
             ChangeTag::Insert => {
-                output += "+";
+                output += "insert ";
                 output += change.value();
                 output += "\n";
             }
             ChangeTag::Equal => {
-                output += "=";
+                output += "goto ";
                 output += change.value();
                 output += "\n";
             }
@@ -36,6 +37,7 @@ fn diff_inner(selected: &str, result: &str, algo: similar::Algorithm) -> String 
     output
 }
 
+#[cfg(test)]
 pub fn diff(selected: &str, result: &str) -> String {
     [
         similar::Algorithm::Myers,
@@ -51,13 +53,18 @@ pub fn diff(selected: &str, result: &str) -> String {
 fn get_changeset(diff: &'_ str) -> anyhow::Result<Vec<(ChangeTag, &'_ str)>> {
     let mut changeset = Vec::new();
     for line in diff.lines() {
-        let tag = match line.chars().next() {
-            Some('-') => ChangeTag::Delete,
-            Some('+') => ChangeTag::Insert,
-            Some('=') => ChangeTag::Equal,
-            _ => anyhow::bail!("invalid diff format, every line should start with +, -, or ="),
-        };
-        changeset.push((tag, &line[1..]));
+        if let Some(rest) = line.strip_prefix("delete ") {
+            changeset.push((ChangeTag::Delete, rest));
+        } else if let Some(rest) = line.strip_prefix("insert ") {
+            changeset.push((ChangeTag::Insert, rest));
+        } else if let Some(rest) = line.strip_prefix("goto ") {
+            changeset.push((ChangeTag::Equal, rest));
+        } else if line.starts_with("note ") {
+        } else {
+            anyhow::bail!(
+                "invalid diff format, every line should start with delete, insert, goto or note"
+            );
+        }
     }
     Ok(changeset)
 }
@@ -91,6 +98,7 @@ pub fn undiff(selected: &str, diff: &str) -> anyhow::Result<String> {
             },
         }
     }
+    output.append(&mut selected.collect());
     Ok(output.join("\n"))
 }
 

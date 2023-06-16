@@ -28,9 +28,6 @@ use crate::{
 struct Opts {
     #[clap(subcommand)]
     subcmd: SubCommand,
-    #[clap(long, default_value = "false")]
-    /// Slightly modify refac's personality.
-    sass: bool,
 }
 
 #[derive(Parser)]
@@ -70,7 +67,7 @@ fn run() -> anyhow::Result<()> {
             transform,
         } => {
             let secrets = Secrets::load()?;
-            let completion = refactor(selected, transform, &secrets, opts.sass)?;
+            let completion = refactor(selected, transform, &secrets)?;
             print!("{}", completion);
         }
     };
@@ -78,14 +75,9 @@ fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn refactor(
-    selected: String,
-    transform: String,
-    sc: &Secrets,
-    sassy: bool,
-) -> anyhow::Result<String> {
+fn refactor(selected: String, transform: String, sc: &Secrets) -> anyhow::Result<String> {
     let client = Client::new(&sc.openai_api_key);
-    let mut messages = chat_prefix(sassy);
+    let mut messages = chat_prefix();
     messages.push(Message::user(&selected));
     messages.push(Message::user(&transform));
 
