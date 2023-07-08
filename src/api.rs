@@ -114,13 +114,6 @@ impl Message {
         }
     }
 
-    pub fn assistant<S: Into<String>>(content: S) -> Message {
-        Message::Assistant {
-            content: Some(content.into()),
-            function_call: None,
-        }
-    }
-
     pub fn try_into_assistant_content(self) -> Option<String> {
         match self {
             Self::Assistant {
@@ -128,6 +121,16 @@ impl Message {
                 function_call: None,
             } => Some(content),
             _ => None,
+        }
+    }
+
+    pub fn assistant_calls<S: Into<String>, A: Into<String>>(name: S, arguments: A) -> Message {
+        Message::Assistant {
+            content: None,
+            function_call: Some(FunctionCall {
+                name: name.into(),
+                arguments: arguments.into(),
+            }),
         }
     }
 }
@@ -197,9 +200,9 @@ impl Endpoint for ChatCompletionRequest {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct FunctionSpec {
-    name: String,
-    description: String,
-    params: Vec<schemars::schema::Schema>,
+    pub name: String,
+    pub description: String,
+    pub params: Vec<schemars::schema::Schema>,
 }
 
 /// Represents a response from the "chat/completions" endpoint.

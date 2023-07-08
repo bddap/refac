@@ -471,6 +471,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazy_fn"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "debc594b5391c3ffd0d4f4c94e49a721102dfb53aaf8192c19e214c9a2e33a02"
+dependencies = [
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -715,6 +725,8 @@ dependencies = [
  "anyhow",
  "clap",
  "itertools",
+ "lazy_fn",
+ "lazy_static",
  "regex",
  "reqwest",
  "rpassword",
