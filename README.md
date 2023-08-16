@@ -123,7 +123,15 @@ Thank you very much for your time and consideration. I eagerly await your respon
 
 Sincerely,
 
+> refac tor '' 'command to show me how many commits I have made'
+git rev-list --count HEAD
+
+> refac tor '' 'say something'
+// "Something"
+// --refac
 ```
+
+That last one 😂
 
 ## Using Refac From Your Favorite Text Editor
 

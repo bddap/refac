@@ -77,33 +77,69 @@ pub struct Usage {
 }
 
 /// Represents a chat message.
+/// serialized examples
+/// ```json
+/// {"role": "system", "content": "You are a helpful chat bot."}
+/// {"role": "user", "content": "What is the weather like in Boston?"},
+/// {"role": "assistant", "content": null, "function_call": {"name": "get_current_weather", "arguments": "{ \"location\": \"Boston, MA\"}"}},
+/// {"role": "function", "name": "get_current_weather", "content": "{\"temperature\": "22", \"unit\": \"celsius\", \"description\": \"Sunny\"}"}
+/// ```
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct Message {
-    pub role: String,
-    pub content: String,
+#[serde(tag = "role")]
+pub enum Message {
+    #[serde(rename = "system")]
+    System { content: String },
+    #[serde(rename = "user")]
+    User { content: String },
+    #[serde(rename = "assistant")]
+    Assistant {
+        content: Option<String>,
+        function_call: Option<FunctionCall>,
+    },
+    /// The result of a function call.
+    #[serde(rename = "function")]
+    Function { name: String, content: String },
 }
 
 impl Message {
     pub fn system<S: Into<String>>(content: S) -> Message {
-        Message {
-            role: "system".into(),
+        Message::System {
             content: content.into(),
         }
     }
 
     pub fn user<S: Into<String>>(content: S) -> Message {
-        Message {
-            role: "user".into(),
+        Message::User {
             content: content.into(),
         }
     }
 
-    pub fn assistant<S: Into<String>>(content: S) -> Message {
-        Message {
-            role: "assistant".into(),
-            content: content.into(),
+    pub fn try_into_assistant_content(self) -> Option<String> {
+        match self {
+            Self::Assistant {
+                content: Some(content),
+                function_call: None,
+            } => Some(content),
+            _ => None,
         }
     }
+
+    pub fn assistant_calls<S: Into<String>, A: Into<String>>(name: S, arguments: A) -> Message {
+        Message::Assistant {
+            content: None,
+            function_call: Some(FunctionCall {
+                name: name.into(),
+                arguments: arguments.into(),
+            }),
+        }
+    }
+}
+
+/// Represents a function call requested by the llm.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct FunctionCall {
+    pub name: String,
+    pub arguments: String,
 }
 
 /// Represents a request for a chat completion.
@@ -147,6 +183,9 @@ pub struct ChatCompletionRequest {
     /// A unique identifier representing your end-user, helping OpenAI monitor and detect abuse.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
+    /// Which functions the model has access to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub functions: Option<Vec<FunctionSpec>>,
 }
 
 impl Endpoint for ChatCompletionRequest {
@@ -157,6 +196,13 @@ impl Endpoint for ChatCompletionRequest {
             .header("Content-Type", "application/json")
             .json(self)
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct FunctionSpec {
+    pub name: String,
+    pub description: String,
+    pub params: Vec<schemars::schema::Schema>,
 }
 
 /// Represents a response from the "chat/completions" endpoint.
