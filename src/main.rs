@@ -1,6 +1,5 @@
 mod api;
 mod api_client;
-mod common;
 mod config_files;
 mod prompt;
 
@@ -8,7 +7,6 @@ use anyhow::Context;
 use api::{ChatCompletionRequest, ChatCompletionResponse};
 use api_client::Client;
 use clap::Parser;
-use common::undiff;
 use config_files::{Config, Secrets};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -19,10 +17,7 @@ use std::{
 };
 use xdg::BaseDirectories;
 
-use crate::{
-    api::Message,
-    prompt::{chat_prefix, fuzzy_undiff},
-};
+use crate::{api::Message, prompt::chat_prefix};
 #[derive(Parser)]
 #[clap(version, author, about)]
 struct Opts {
@@ -112,9 +107,7 @@ fn refactor(
         "logs",
     )?;
 
-    tracing::debug!("response: {}", serde_json::to_string(&response).unwrap());
-
-    let diff = response
+    let transformed_text = response
         .choices
         .into_iter()
         .next()
@@ -122,25 +115,7 @@ fn refactor(
         .message
         .content;
 
-    tracing::debug!("diff: \n{}", diff);
-
-    let result = match undiff(&selected, &diff) {
-        Ok(new) => new,
-        Err(err) => {
-            log(
-                UndiffFailure {
-                    selected: selected.clone(),
-                    diff: diff.clone(),
-                    transform,
-                    err: err.to_string(),
-                },
-                "undiff_failure",
-            )?;
-            fuzzy_undiff(&selected, &diff, &client, "gpt-3.5-turbo")?
-        }
-    };
-
-    Ok(result)
+    Ok(transformed_text)
 }
 
 fn log_location(title: &str) -> anyhow::Result<PathBuf> {
