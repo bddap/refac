@@ -9,7 +9,7 @@ use api::{ChatCompletionRequest, ChatCompletionResponse};
 use api_client::Client;
 use clap::Parser;
 use common::undiff;
-use config_files::Secrets;
+use config_files::{Config, Secrets};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{create_dir_all, OpenOptions},
@@ -67,7 +67,8 @@ fn run() -> anyhow::Result<()> {
             transform,
         } => {
             let secrets = Secrets::load()?;
-            let completion = refactor(selected, transform, &secrets)?;
+            let config = Config::load()?;
+            let completion = refactor(selected, transform, &secrets, &config)?;
             print!("{}", completion);
         }
     };
@@ -75,14 +76,19 @@ fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn refactor(selected: String, transform: String, sc: &Secrets) -> anyhow::Result<String> {
+fn refactor(
+    selected: String,
+    transform: String,
+    sc: &Secrets,
+    config: &Config,
+) -> anyhow::Result<String> {
     let client = Client::new(&sc.openai_api_key);
     let mut messages = chat_prefix();
     messages.push(Message::user(&selected));
     messages.push(Message::user(&transform));
 
     let request = ChatCompletionRequest {
-        model: "gpt-4".into(), // don't have access to "gpt-4-32k" yet
+        model: config.model.clone(),
         messages,
         temperature: None,
         top_p: None,
