@@ -7,11 +7,7 @@ Transform some text given a generic natural language prompt.
 """
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-categories = [
-  "command-line-utilities",
-  "text-processing",
-  "text-editors"
-]
+categories = ["command-line-utilities", "text-processing", "text-editors"]
 repository = "https://github.com/bddap/refac"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -20,7 +16,11 @@ repository = "https://github.com/bddap/refac"
 anyhow = "1.0.69"
 clap = { version = "4.1.8", features = ["derive"] }
 itertools = "0.10.5"
-reqwest = { version = "0.11.14", features = ["blocking", "json"] }
+reqwest = { version = "0.11.14", default-features = false, features = [
+  "rustls-tls",
+  "blocking",
+  "json",
+] }
 rpassword = "7.2.0"
 serde = { version = "1.0.154", features = ["derive"] }
 serde_json = "1.0.94"
