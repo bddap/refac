@@ -5,15 +5,11 @@
 The workflow:
 - Select some text.
 - Run the command, write instructions on what you want changed.
-- Never edit text directly again.
+- Enjoy the sassy comments.
 
 This tool calls the openai api. You'll need your own api key to use it.
 Use `refac login` to enter your api key. It will be saved in your home directory
-for future use.
-
-This tool uses your openai account so usage is not exactly free. It uses the gpt-4 model
-chat completion endpoint on the order of ~$0.10 per completion.
-You can use https://platform.openai.com/account to see your usage.
+for future use. See [your api usage](https://platform.openai.com/account) .
 
 ## SETUP
 
