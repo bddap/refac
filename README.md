@@ -135,60 +135,67 @@ First, make sure you have:
 
 After installing and logging in add this chunk of flim-flam to your init.el:
 
+*Note this code assumes `init.el` is using lexical-binding.
+Make sure `;; -*- lexical-binding: t -*-` is added to the top of `init.el`.
+Otherwise the following code won't work.*
+
 ```elisp
-(defun refac-git-style-diff (a b)
-  (with-temp-buffer (let ((temp-file-a (make-temp-file "a"))
-                          (temp-file-b (make-temp-file "b")))
-                      (unwind-protect (progn (write-region a nil temp-file-a)
-                                             (write-region b nil temp-file-b)
-                                             (call-process "diff" nil t nil "-u" temp-file-a temp-file-b)
-                                             (buffer-string))
-                        (delete-file temp-file-a)
-                        (delete-file temp-file-b)))))
+(defun refac-call-executable-async (selected-text transform callback)
+  "Asynchronously call the refac executable, passing SELECTED-TEXT and TRANSFORM.
+CALLBACK is a function taking two parameters: EXIT-STATUS and RESULT."
+  (let ((refac-executable (executable-find "refac"))
+        (temp-buf (generate-new-buffer "*refac-output*")))
+    (if refac-executable
+        (make-process
+         :name "refac-async"
+         :buffer temp-buf
+         :command (list refac-executable "tor" selected-text transform)
+         :sentinel
+         (lambda (proc _event)
+           (when (memq (process-status proc) '(exit signal))
+             (let ((buf (process-buffer proc)))
+               ;; Ensure the buffer is still alive before attempting to read from it
+               (when (buffer-live-p buf)
+                 (with-current-buffer buf
+                   (let ((exit-status (process-exit-status proc))
+                         (result (buffer-string)))
+                     (kill-buffer buf)
+                     (funcall callback exit-status result))))))))
+      (error "refac executable not found"))))
 
-(defun refac-filter-diff-output (diff-output)
-  (with-temp-buffer (insert diff-output)
-                    (goto-char (point-min))
-                    (while (not (eobp))
-                      (let ((line
-                             (buffer-substring-no-properties
-                              (line-beginning-position)
-                              (line-end-position))))
-                        (if (or (string-prefix-p "--- " line)
-                                (string-prefix-p "+++ " line)
-                                (string-prefix-p "\\ No newline at end of file" line))
-                            (delete-region (line-beginning-position)
-                                           (1+ (line-end-position)))
-                          (forward-line))))
-                    (buffer-string)))
+(global-set-key (kbd "C-c r") 'refac)
 
-
-(defun refac-call-executable (selected-text transform)
-  (let (result exit-status refac-executable)
-    (setq refac-executable (executable-find "refac"))
-    (if refac-executable (with-temp-buffer
-                           (setq exit-status (call-process refac-executable nil t nil "tor" selected-text transform))
-                           (setq result (buffer-string)))
-      (error
-       "refac executable not found"))
-    (if (zerop exit-status) result
-      (error
-       "refac returned a non-zero exit status: %d. Error: %s"
-       exit-status
-       result))))
-
-(defun refac (start end)
-  (interactive "r")
-  (let* ((selected-text
-          (buffer-substring-no-properties
-           start
-           end))
-         (transform (read-string "Enter transformation instruction: ")))
-    (let ((result (refac-call-executable selected-text transform)))
-      (delete-region start end)
-      (insert result)
-      (let ((diff-output (refac-git-style-diff selected-text result)))
-        (message (refac-filter-diff-output diff-output))))))
+(defun refac (beg end transform)
+  "Perform the refac transform in place, inserting merge markers inline, asynchronously.
+The overlay will display the transform prompt until the results arrive."
+  (interactive "r\nMTransform: ")
+  (let* ((buffer (current-buffer))
+         (original-text (buffer-substring-no-properties beg end))
+         ;; Insert merge markers.
+         (_ (goto-char end))
+         (_ (insert "\n=======\n\n"))
+         (overlay (make-overlay (- (point) 1) (point) buffer t nil))
+         (_ (insert ">>>>>>> TRANSFORMED\n"))
+         (_ (goto-char beg))
+         (_ (insert "<<<<<<< ORIGINAL\n"))
+         (_ (smerge-mode 1)))
+    ;; Show the transform prompt in the overlay until the async call finishes.
+    (overlay-put overlay 'display
+                 (concat "Running refac...\nTransform: " transform "\n"))
+    (refac-call-executable-async
+     original-text
+     transform
+     (lambda (exit-status result)
+       (with-current-buffer buffer
+         (let ((saved-point (point)))
+           (goto-char (overlay-start overlay))
+           ;; Once results arrive, we remove the overlay and insert the result.
+           (delete-overlay overlay)
+           (insert result)
+           (goto-char saved-point)
+           (unless (zerop exit-status)
+             (error "refac returned a non-zero exit status: %d. Error: %s"
+                    exit-status result))))))))
 ```
 
 And bind the function to a key if you like that sort of thing.
