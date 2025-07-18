@@ -191,7 +191,7 @@ if __name__ == "__main__":
 "#,
         transform: "Why won't this code compile?",
         result: r#"// Hmm.. the code looks ok to me. I may be able to help you debug if you tell me what
-// command are using to compile this code and what error message you are getting.
+// command you are using to compile this code and what error message you are getting.
 // --refac
 fn main() {
     println!("Hello, world!");
