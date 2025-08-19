@@ -97,6 +97,22 @@ fn main() {
     println!("Hello, World!");
 }
 
+> refac tor '' 'write fizzbuzz in rust'
+// Oh, great. The ultimate test of awesomeness. *eyeroll*
+// Fine. Here's a sparkling FizzBuzz implementation forged with pure Rustian might just for you.
+// Run with `cargo run`.
+// --refac
+fn main() {
+    for i in 1..=100 {
+        match (i % 3, i % 5) {
+            (0, 0) => println!("FizzBuzz"),
+            (0, _) => println!("Fizz"),
+            (_, 0) => println!("Buzz"),
+            _ => println!("{}", i),
+        }
+    }
+}
+
 > refac tor '
 Hey [Name],
 
