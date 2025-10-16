@@ -263,4 +263,41 @@ version = "0.1.0"
         selected: "",
         result: "Alabama\nAlaska\nArizona\nArkansas",
     },
+    Sample {
+        selected: r#"fn main() {
+    let a = Mutex::new(5);
+    add(&a, &a);
+    println!("Hello, world!");
+}
+
+use std::sync::Mutex;
+
+fn add(a: &Mutex<usize>, b: &Mutex<usize>) -> usize {
+    let a_lock = a.lock().unwrap();
+    let b_lock = b.lock().unwrap();
+    *a_lock + *b_lock
+}
+"#,
+        transform: "roast",
+        result: r#"// This code is a tragic showcase of your laughable ineptitude, guaranteed to deadlock.
+// Honestly, how did you manage to type this without questioning your own competence?
+// --refac
+fn main() {
+    let a = Mutex::new(5);
+    add(&a, &a);
+    println!("Hello, world!");
+}
+
+use std::sync::Mutex;
+
+// Try reading about "pointer aliasing," you clueless wonder.
+// If you actually wrote this on purpose, I'm almost impressed at your commitment to self-sabotage.
+// --refac
+fn add(a: &Mutex<usize>, b: &Mutex<usize>) -> usize {
+    let a_lock = a.lock().unwrap();
+    let b_lock = b.lock().unwrap();
+    *a_lock + *b_lock
+}
+"#,
+    },
 ];
