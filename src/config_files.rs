@@ -51,6 +51,19 @@ fn default_provider() -> Provider {
     Provider::Anthropic
 }
 
+/// How edits are produced. `Tool` (default, Anthropic only) returns structured
+/// substring replacements via a function call; `Rewrite` re-emits the full text.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum EditMode {
+    Rewrite,
+    Tool,
+}
+
+fn default_edit_mode() -> EditMode {
+    EditMode::Tool
+}
+
 fn default_max_tokens() -> u32 {
     16000
 }
@@ -62,6 +75,10 @@ pub struct Config {
     /// Model id. If unset, a sensible default is chosen per provider (see `model()`).
     #[serde(default)]
     pub model: Option<String>,
+    /// Edit strategy. Tool-call edits (default) only apply on the Anthropic
+    /// provider; the OpenAI path always rewrites.
+    #[serde(default = "default_edit_mode")]
+    pub edit_mode: EditMode,
     /// Max tokens to generate. Required by Anthropic; ignored by the OpenAI path.
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
@@ -72,6 +89,7 @@ impl Default for Config {
         Config {
             provider: default_provider(),
             model: None,
+            edit_mode: default_edit_mode(),
             max_tokens: default_max_tokens(),
         }
     }
@@ -91,6 +109,12 @@ impl Config {
         }
         if let Ok(from_env) = std::env::var("REFAC_MODEL") {
             ret.model = Some(from_env);
+        }
+        if let Ok(from_env) = std::env::var("REFAC_EDIT_MODE") {
+            ret.edit_mode = match from_env.to_lowercase().as_str() {
+                "rewrite" => EditMode::Rewrite,
+                _ => EditMode::Tool,
+            };
         }
         Ok(ret)
     }

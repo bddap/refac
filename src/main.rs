@@ -8,7 +8,7 @@ use anyhow::Context;
 use api::{ChatCompletionRequest, Message};
 use api_client::Client;
 use clap::Parser;
-use config_files::{Config, Provider, Secrets};
+use config_files::{Config, EditMode, Provider, Secrets};
 use serde::Serialize;
 use std::{
     fs::{create_dir_all, OpenOptions},
@@ -18,7 +18,8 @@ use std::{
 };
 use xdg::BaseDirectories;
 
-use crate::prompt::chat_prefix;
+use crate::anthropic::Edit;
+use crate::prompt::{chat_prefix, edit_prefix};
 
 #[derive(Parser)]
 #[clap(version, author, about)]
@@ -88,10 +89,6 @@ fn refactor(
     sc: &Secrets,
     config: &Config,
 ) -> anyhow::Result<String> {
-    let mut messages = chat_prefix();
-    messages.push(Message::user(&selected));
-    messages.push(Message::user(&transform));
-
     let model = config.model();
 
     let output = match config.provider {
@@ -101,14 +98,35 @@ fn refactor(
                     "No Anthropic API key found. Set ANTHROPIC_API_KEY or run 'refac login'."
                 )
             })?;
-            anthropic::complete(key, &model, config.max_tokens, &messages)?
+            match config.edit_mode {
+                EditMode::Tool => {
+                    // Model returns structured edits via a tool call; apply them
+                    // to the original text instead of re-emitting the whole thing.
+                    let mut messages = edit_prefix();
+                    messages.push(Message::user(&selected));
+                    messages.push(Message::user(&transform));
+                    let edits =
+                        anthropic::request_edits(key, &model, config.max_tokens, &messages)?;
+                    apply_edits(&selected, &edits)?
+                }
+                EditMode::Rewrite => {
+                    let mut messages = chat_prefix();
+                    messages.push(Message::user(&selected));
+                    messages.push(Message::user(&transform));
+                    anthropic::complete(key, &model, config.max_tokens, &messages)?
+                }
+            }
         }
         Provider::Openai => {
+            // OpenAI path always rewrites (tool-edit mode is Anthropic-only).
             let key = sc.openai_api_key.as_deref().ok_or_else(|| {
                 anyhow::anyhow!(
                     "No OpenAI API key found. Set OPENAI_API_KEY or run 'refac login'."
                 )
             })?;
+            let mut messages = chat_prefix();
+            messages.push(Message::user(&selected));
+            messages.push(Message::user(&transform));
             openai_complete(key, &model, messages)?
         }
     };
@@ -155,6 +173,25 @@ fn openai_complete(api_key: &str, model: &str, messages: Vec<Message>) -> anyhow
         .map(|choice| choice.message.content)
 }
 
+/// Apply a list of exact-substring edits to `text`, in order. Each edit replaces
+/// the first occurrence of `old`. Errors if `old` isn't found (keeps a bad/stale
+/// edit from silently doing nothing).
+fn apply_edits(text: &str, edits: &[Edit]) -> anyhow::Result<String> {
+    let mut out = text.to_string();
+    for e in edits {
+        match out.find(&e.old) {
+            Some(pos) => out.replace_range(pos..pos + e.old.len(), &e.new),
+            None => {
+                return Err(anyhow::anyhow!(
+                    "edit target not found in text: {:?}",
+                    e.old
+                ))
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn log_location(title: &str) -> anyhow::Result<PathBuf> {
     let bd = BaseDirectories::with_prefix("refac")?;
     let ret = bd.get_data_file(format!("{title}.jsonl"));
@@ -192,4 +229,40 @@ fn log<T: Serialize>(t: T, title: &str) -> anyhow::Result<()> {
     }
 
     inner(t, title).with_context(|| format!("failed to log {}", title))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn edit(old: &str, new: &str) -> Edit {
+        Edit {
+            old: old.to_string(),
+            new: new.to_string(),
+        }
+    }
+
+    #[test]
+    fn applies_edits_in_order() {
+        let out = apply_edits(
+            "Me like toast.",
+            &[edit("Me like", "I like"), edit("toast", "bread")],
+        )
+        .unwrap();
+        assert_eq!(out, "I like bread.");
+    }
+
+    #[test]
+    fn insert_via_anchor_and_delete_via_empty() {
+        let out = apply_edits("fn main() {}", &[edit("{}", "{\n    // hi\n}")]).unwrap();
+        assert_eq!(out, "fn main() {\n    // hi\n}");
+        let out = apply_edits("hello world", &[edit(" world", "")]).unwrap();
+        assert_eq!(out, "hello");
+    }
+
+    #[test]
+    fn missing_target_errors() {
+        let err = apply_edits("abc", &[edit("xyz", "q")]).unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
 }

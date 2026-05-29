@@ -19,6 +19,9 @@ Config (`~/.config/refac/config.toml`, all optional):
 ```toml
 provider = "anthropic"    # or "openai"
 model = "claude-opus-4-8" # default per provider; or set REFAC_MODEL
+edit_mode = "tool"        # "tool" (default, Anthropic): structured edits via a
+                          # function call, not a full rewrite. "rewrite" = old
+                          # behavior. OpenAI always rewrites. Or set REFAC_EDIT_MODE.
 max_tokens = 16000        # Anthropic only
 ```
 

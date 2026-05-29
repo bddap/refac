@@ -65,6 +65,35 @@ struct MessagesRequest {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     system: Vec<TextBlock>,
     messages: Vec<ChatMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<Tool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<ToolChoice>,
+}
+
+#[derive(Serialize)]
+struct Tool {
+    name: &'static str,
+    description: &'static str,
+    input_schema: Value,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ToolChoice {
+    Tool { name: &'static str },
+}
+
+/// One exact-substring replacement, as returned by the `apply_edits` tool.
+#[derive(Debug, Deserialize)]
+pub struct Edit {
+    pub old: String,
+    pub new: String,
+}
+
+#[derive(Deserialize)]
+struct EditInput {
+    edits: Vec<Edit>,
 }
 
 #[derive(Deserialize)]
@@ -78,6 +107,10 @@ struct ResponseBlock {
     kind: String,
     #[serde(default)]
     text: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    input: Option<Value>,
 }
 
 /// Send a chat-style prompt to the Claude Messages API and return the text.
@@ -93,34 +126,7 @@ pub fn complete(
     messages: &[Message],
 ) -> anyhow::Result<String> {
     let req = build_request(model, max_tokens, messages);
-
-    if std::env::var("REFAC_DEBUG").is_ok() {
-        eprintln!("{}", serde_json::to_string_pretty(&req).unwrap_or_default());
-    }
-
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(60 * 4))
-        .build()
-        .context("building HTTP client")?;
-
-    let response = client
-        .post(API_URL)
-        .header("x-api-key", api_key)
-        .header("anthropic-version", ANTHROPIC_VERSION)
-        .header("content-type", "application/json")
-        .json(&req)
-        .send()
-        .context("Failed to send request to Anthropic API")?;
-
-    let status = response.status();
-    let body = response
-        .json::<Value>()
-        .with_context(|| anyhow::anyhow!("Status: {status}. Failed to parse response body."))?;
-
-    if !status.is_success() {
-        let pretty = serde_json::to_string_pretty(&body).unwrap_or_else(|_| body.to_string());
-        return Err(anyhow::anyhow!("Status: {status}. Body: {pretty}"));
-    }
+    let body = send(api_key, &req)?;
 
     let parsed: MessagesResponse = serde_json::from_value(body.clone())
         .map_err(|e| anyhow::anyhow!("Error while parsing response: {e} Body: {body}"))?;
@@ -137,6 +143,100 @@ pub fn complete(
     }
 
     Ok(text)
+}
+
+/// Ask Claude to express its changes as a list of exact-substring edits via the
+/// `apply_edits` tool, instead of re-emitting the whole text. The caller applies
+/// the returned edits to the original input.
+pub fn request_edits(
+    api_key: &str,
+    model: &str,
+    max_tokens: u32,
+    messages: &[Message],
+) -> anyhow::Result<Vec<Edit>> {
+    let mut req = build_request(model, max_tokens, messages);
+    req.tools = Some(vec![Tool {
+        name: "apply_edits",
+        description: "Apply edits to the selected text as a list of exact-substring \
+            replacements. Each `old` MUST appear verbatim in the selected text. \
+            Make the smallest edits that satisfy the request; do not restate \
+            unchanged text. To insert, use a nearby unique substring as `old` and \
+            set `new` to that substring plus your addition. Edits apply in order.",
+        input_schema: edit_schema(),
+    }]);
+    req.tool_choice = Some(ToolChoice::Tool { name: "apply_edits" });
+
+    let body = send(api_key, &req)?;
+
+    let parsed: MessagesResponse = serde_json::from_value(body.clone())
+        .map_err(|e| anyhow::anyhow!("Error while parsing response: {e} Body: {body}"))?;
+
+    let input = parsed
+        .content
+        .into_iter()
+        .find(|b| b.kind == "tool_use" && b.name.as_deref() == Some("apply_edits"))
+        .and_then(|b| b.input)
+        .ok_or_else(|| anyhow::anyhow!("Anthropic did not return an apply_edits tool call. Body: {body}"))?;
+
+    let edits: EditInput = serde_json::from_value(input)
+        .map_err(|e| anyhow::anyhow!("Error parsing apply_edits input: {e}"))?;
+
+    Ok(edits.edits)
+}
+
+fn edit_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "edits": {
+                "type": "array",
+                "description": "Ordered list of substring replacements.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "old": { "type": "string", "description": "Exact substring to replace; must occur verbatim in the input." },
+                        "new": { "type": "string", "description": "Replacement text." }
+                    },
+                    "required": ["old", "new"]
+                }
+            }
+        },
+        "required": ["edits"]
+    })
+}
+
+/// POST a request to the Messages API and return the parsed JSON body, erroring
+/// on non-2xx status.
+fn send(api_key: &str, req: &MessagesRequest) -> anyhow::Result<Value> {
+    if std::env::var("REFAC_DEBUG").is_ok() {
+        eprintln!("{}", serde_json::to_string_pretty(req).unwrap_or_default());
+    }
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(60 * 4))
+        .build()
+        .context("building HTTP client")?;
+
+    let response = client
+        .post(API_URL)
+        .header("x-api-key", api_key)
+        .header("anthropic-version", ANTHROPIC_VERSION)
+        .header("content-type", "application/json")
+        .json(req)
+        .send()
+        .context("Failed to send request to Anthropic API")?;
+
+    let status = response.status();
+    let body = response
+        .json::<Value>()
+        .with_context(|| anyhow::anyhow!("Status: {status}. Failed to parse response body."))?;
+
+    if !status.is_success() {
+        let pretty = serde_json::to_string_pretty(&body).unwrap_or_else(|_| body.to_string());
+        return Err(anyhow::anyhow!("Status: {status}. Body: {pretty}"));
+    }
+
+    Ok(body)
 }
 
 fn build_request(model: &str, max_tokens: u32, messages: &[Message]) -> MessagesRequest {
@@ -188,6 +288,8 @@ fn build_request(model: &str, max_tokens: u32, messages: &[Message]) -> Messages
         max_tokens,
         system,
         messages: convo,
+        tools: None,
+        tool_choice: None,
     }
 }
 
