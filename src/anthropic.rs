@@ -94,6 +94,10 @@ pub fn complete(
 ) -> anyhow::Result<String> {
     let req = build_request(model, max_tokens, messages);
 
+    if std::env::var("REFAC_DEBUG").is_ok() {
+        eprintln!("{}", serde_json::to_string_pretty(&req).unwrap_or_default());
+    }
+
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(60 * 4))
         .build()
@@ -140,6 +144,11 @@ fn build_request(model: &str, max_tokens: u32, messages: &[Message]) -> Messages
     let mut convo: Vec<ChatMessage> = Vec::new();
 
     for m in messages {
+        // Anthropic rejects empty text blocks (some few-shot samples have an empty
+        // `selected`); the OpenAI path tolerated them. Drop empties here.
+        if m.content.is_empty() {
+            continue;
+        }
         if m.role == "system" {
             if !system_text.is_empty() {
                 system_text.push_str("\n\n");
@@ -222,6 +231,29 @@ mod tests {
         // user input is NOT cached.
         assert_eq!(m[1]["content"][0]["cache_control"]["type"], "ephemeral");
         assert!(m[2]["content"][1].get("cache_control").is_none());
+    }
+
+    #[test]
+    fn empty_text_blocks_are_dropped() {
+        // A few-shot sample with an empty `selected` must not produce an empty
+        // text block (Anthropic 400s on those).
+        let msgs = vec![
+            Message::user(""),
+            Message::user("write hello world"),
+            Message::assistant("print('hello world')"),
+            Message::user("real input"),
+            Message::user(""),
+        ];
+        let req = build_request("claude-opus-4-8", 100, &msgs);
+        let v = serde_json::to_value(&req).unwrap();
+        // No empty text anywhere.
+        let s = serde_json::to_string(&v).unwrap();
+        assert!(!s.contains(r#""text":"""#), "empty text block leaked: {s}");
+        let m = v["messages"].as_array().unwrap();
+        assert_eq!(m[0]["role"], "user");
+        assert_eq!(m[0]["content"][0]["text"], "write hello world");
+        assert_eq!(m[1]["role"], "assistant");
+        assert_eq!(m[2]["content"][0]["text"], "real input");
     }
 
     #[test]
