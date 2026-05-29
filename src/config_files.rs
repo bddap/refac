@@ -47,6 +47,9 @@ pub enum Provider {
     Openai,
 }
 
+/// Default Claude model. Bump here when model ids churn.
+const DEFAULT_ANTHROPIC_MODEL: &str = "claude-opus-4-8";
+
 fn default_provider() -> Provider {
     Provider::Anthropic
 }
@@ -103,8 +106,9 @@ impl Config {
         };
         if let Ok(from_env) = std::env::var("REFAC_PROVIDER") {
             ret.provider = match from_env.to_lowercase().as_str() {
+                "anthropic" => Provider::Anthropic,
                 "openai" => Provider::Openai,
-                _ => Provider::Anthropic,
+                other => anyhow::bail!("unknown REFAC_PROVIDER {other:?} (expected anthropic|openai)"),
             };
         }
         if let Ok(from_env) = std::env::var("REFAC_MODEL") {
@@ -113,7 +117,8 @@ impl Config {
         if let Ok(from_env) = std::env::var("REFAC_EDIT_MODE") {
             ret.edit_mode = match from_env.to_lowercase().as_str() {
                 "rewrite" => EditMode::Rewrite,
-                _ => EditMode::Tool,
+                "tool" => EditMode::Tool,
+                other => anyhow::bail!("unknown REFAC_EDIT_MODE {other:?} (expected tool|rewrite)"),
             };
         }
         Ok(ret)
@@ -124,7 +129,7 @@ impl Config {
         match &self.model {
             Some(m) => m.clone(),
             None => match self.provider {
-                Provider::Anthropic => "claude-opus-4-8".to_string(),
+                Provider::Anthropic => DEFAULT_ANTHROPIC_MODEL.to_string(),
                 Provider::Openai => "o1".to_string(),
             },
         }

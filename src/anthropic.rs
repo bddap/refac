@@ -20,6 +20,7 @@ use crate::api::Message;
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
+const APPLY_EDITS: &str = "apply_edits";
 
 #[derive(Serialize)]
 struct CacheControl {
@@ -99,6 +100,21 @@ struct EditInput {
 #[derive(Deserialize)]
 struct MessagesResponse {
     content: Vec<ResponseBlock>,
+    #[serde(default)]
+    stop_reason: Option<String>,
+}
+
+impl MessagesResponse {
+    /// Error if generation was cut off at the token limit — a truncated rewrite
+    /// or a half-finished tool call is worse than a clear failure.
+    fn check_complete(&self) -> anyhow::Result<()> {
+        if self.stop_reason.as_deref() == Some("max_tokens") {
+            return Err(anyhow::anyhow!(
+                "response was truncated at max_tokens; raise `max_tokens` in config and retry"
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Deserialize)]
@@ -130,6 +146,7 @@ pub fn complete(
 
     let parsed: MessagesResponse = serde_json::from_value(body.clone())
         .map_err(|e| anyhow::anyhow!("Error while parsing response: {e} Body: {body}"))?;
+    parsed.check_complete()?;
 
     let text: String = parsed
         .content
@@ -139,7 +156,7 @@ pub fn complete(
         .collect();
 
     if text.is_empty() {
-        return Err(anyhow::anyhow!("Anthropic returned no text content."));
+        return Err(anyhow::anyhow!("Anthropic returned no text content. Body: {body}"));
     }
 
     Ok(text)
@@ -156,30 +173,34 @@ pub fn request_edits(
 ) -> anyhow::Result<Vec<Edit>> {
     let mut req = build_request(model, max_tokens, messages);
     req.tools = Some(vec![Tool {
-        name: "apply_edits",
+        name: APPLY_EDITS,
         description: "Apply edits to the selected text as a list of exact-substring \
-            replacements. Each `old` MUST appear verbatim in the selected text. \
-            Make the smallest edits that satisfy the request; do not restate \
-            unchanged text. To insert, use a nearby unique substring as `old` and \
-            set `new` to that substring plus your addition. Edits apply in order.",
+            replacements. Each `old` MUST be a substring that occurs EXACTLY ONCE \
+            verbatim in the selected text — if it would be ambiguous, extend it \
+            until unique. Edits are independent and must not overlap (each is \
+            matched against the original text, regardless of order). Make the \
+            smallest edits that satisfy the request; do not restate unchanged text. \
+            To insert, use a unique nearby substring as `old` and set `new` to that \
+            substring plus your addition; to delete, set `new` to the empty string.",
         input_schema: edit_schema(),
     }]);
-    req.tool_choice = Some(ToolChoice::Tool { name: "apply_edits" });
+    req.tool_choice = Some(ToolChoice::Tool { name: APPLY_EDITS });
 
     let body = send(api_key, &req)?;
 
     let parsed: MessagesResponse = serde_json::from_value(body.clone())
         .map_err(|e| anyhow::anyhow!("Error while parsing response: {e} Body: {body}"))?;
+    parsed.check_complete()?;
 
     let input = parsed
         .content
         .into_iter()
-        .find(|b| b.kind == "tool_use" && b.name.as_deref() == Some("apply_edits"))
+        .find(|b| b.kind == "tool_use" && b.name.as_deref() == Some(APPLY_EDITS))
         .and_then(|b| b.input)
         .ok_or_else(|| anyhow::anyhow!("Anthropic did not return an apply_edits tool call. Body: {body}"))?;
 
     let edits: EditInput = serde_json::from_value(input)
-        .map_err(|e| anyhow::anyhow!("Error parsing apply_edits input: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("Error parsing apply_edits input: {e}. Body: {body}"))?;
 
     Ok(edits.edits)
 }
@@ -190,12 +211,12 @@ fn edit_schema() -> Value {
         "properties": {
             "edits": {
                 "type": "array",
-                "description": "Ordered list of substring replacements.",
+                "description": "Independent substring replacements; each is matched against the original text and they must not overlap.",
                 "items": {
                     "type": "object",
                     "properties": {
-                        "old": { "type": "string", "description": "Exact substring to replace; must occur verbatim in the input." },
-                        "new": { "type": "string", "description": "Replacement text." }
+                        "old": { "type": "string", "minLength": 1, "description": "Non-empty substring that occurs EXACTLY ONCE verbatim in the input. Extend it until unique." },
+                        "new": { "type": "string", "description": "Replacement text (empty string to delete)." }
                     },
                     "required": ["old", "new"]
                 }

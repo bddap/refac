@@ -30,8 +30,13 @@ struct Opts {
 
 #[derive(Parser)]
 enum SubCommand {
-    /// Save your API key for future use (for the provider set in config; Anthropic by default).
-    Login,
+    /// Save your API key for future use. Defaults to the configured provider
+    /// (Anthropic unless overridden); pass --provider to be explicit.
+    Login {
+        /// Which provider's key to save: "anthropic" or "openai".
+        #[clap(long)]
+        provider: Option<String>,
+    },
     /// Apply the instructions encoded in `transform` to the text in `selected`.
     /// Get it? 'refac tor'
     Tor { selected: String, transform: String },
@@ -52,17 +57,26 @@ fn run() -> anyhow::Result<()> {
     let opts: Opts = Opts::parse();
 
     match opts.subcmd {
-        SubCommand::Login => {
-            let config = Config::load()?;
+        SubCommand::Login { provider } => {
+            // --provider overrides config for this invocation; else use the
+            // configured provider (Anthropic by default).
+            let provider = match provider.as_deref() {
+                None => Config::load()?.provider,
+                Some("anthropic") => Provider::Anthropic,
+                Some("openai") => Provider::Openai,
+                Some(other) => {
+                    anyhow::bail!("unknown --provider {other:?} (expected anthropic|openai)")
+                }
+            };
             let mut secrets = Secrets::load().unwrap_or_default();
-            match config.provider {
+            match provider {
                 Provider::Anthropic => {
-                    println!("https://console.anthropic.com/settings/keys");
+                    println!("Saving an Anthropic API key. (https://console.anthropic.com/settings/keys)");
                     let api_key = rpassword::prompt_password("Enter your Anthropic API key:")?;
                     secrets.anthropic_api_key = Some(api_key);
                 }
                 Provider::Openai => {
-                    println!("https://platform.openai.com/account/api-keys");
+                    println!("Saving an OpenAI API key. (https://platform.openai.com/account/api-keys)");
                     let api_key = rpassword::prompt_password("Enter your OpenAI API key:")?;
                     secrets.openai_api_key = Some(api_key);
                 }
@@ -173,21 +187,45 @@ fn openai_complete(api_key: &str, model: &str, messages: Vec<Message>) -> anyhow
         .map(|choice| choice.message.content)
 }
 
-/// Apply a list of exact-substring edits to `text`, in order. Each edit replaces
-/// the first occurrence of `old`. Errors if `old` isn't found (keeps a bad/stale
-/// edit from silently doing nothing).
+/// Apply exact-substring edits to `text`. Every `old` is resolved against the
+/// ORIGINAL text (not a progressively-mutated buffer), so edits are independent
+/// of each other and of ordering. An edit is rejected — failing the whole
+/// refactor rather than silently corrupting the buffer — if its `old` is empty,
+/// missing, ambiguous (occurs more than once), or overlaps another edit.
 fn apply_edits(text: &str, edits: &[Edit]) -> anyhow::Result<String> {
-    let mut out = text.to_string();
+    // Resolve each edit to a byte range in the original text.
+    let mut ranges: Vec<(usize, usize, &str)> = Vec::with_capacity(edits.len());
     for e in edits {
-        match out.find(&e.old) {
-            Some(pos) => out.replace_range(pos..pos + e.old.len(), &e.new),
-            None => {
-                return Err(anyhow::anyhow!(
-                    "edit target not found in text: {:?}",
-                    e.old
-                ))
-            }
+        if e.old.is_empty() {
+            return Err(anyhow::anyhow!(
+                "edit has an empty `old`; use a unique anchor substring instead"
+            ));
         }
+        let start = text
+            .find(&e.old)
+            .ok_or_else(|| anyhow::anyhow!("edit target not found in text: {:?}", e.old))?;
+        let end = start + e.old.len();
+        if text[end..].contains(&e.old) {
+            return Err(anyhow::anyhow!(
+                "edit target is not unique in text: {:?} (use a longer, unique anchor)",
+                e.old
+            ));
+        }
+        ranges.push((start, end, e.new.as_str()));
+    }
+
+    // Reject overlapping edits.
+    ranges.sort_by_key(|r| r.0);
+    for w in ranges.windows(2) {
+        if w[0].1 > w[1].0 {
+            return Err(anyhow::anyhow!("edits overlap in the text; refusing to apply"));
+        }
+    }
+
+    // Apply right-to-left so earlier byte offsets stay valid.
+    let mut out = text.to_string();
+    for (start, end, new) in ranges.into_iter().rev() {
+        out.replace_range(start..end, new);
     }
     Ok(out)
 }
@@ -243,7 +281,7 @@ mod tests {
     }
 
     #[test]
-    fn applies_edits_in_order() {
+    fn applies_multiple_edits() {
         let out = apply_edits(
             "Me like toast.",
             &[edit("Me like", "I like"), edit("toast", "bread")],
@@ -264,5 +302,31 @@ mod tests {
     fn missing_target_errors() {
         let err = apply_edits("abc", &[edit("xyz", "q")]).unwrap_err();
         assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn rejects_ambiguous_old() {
+        let err = apply_edits("a a", &[edit("a", "b")]).unwrap_err();
+        assert!(err.to_string().contains("not unique"));
+    }
+
+    #[test]
+    fn rejects_empty_old() {
+        let err = apply_edits("abc", &[edit("", "x")]).unwrap_err();
+        assert!(err.to_string().contains("empty"));
+    }
+
+    #[test]
+    fn rejects_overlapping_edits() {
+        let err = apply_edits("abcd", &[edit("abc", "X"), edit("bcd", "Y")]).unwrap_err();
+        assert!(err.to_string().contains("overlap"));
+    }
+
+    #[test]
+    fn edits_resolve_against_original_not_mutated_buffer() {
+        // edit 1 introduces "foo"; edit 2 must target the ORIGINAL "foo" only,
+        // not the one edit 1 created. Both resolve against the original input.
+        let out = apply_edits("foo bar", &[edit("bar", "foo"), edit("foo", "baz")]).unwrap();
+        assert_eq!(out, "baz foo");
     }
 }
