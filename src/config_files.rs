@@ -47,10 +47,6 @@ pub enum Provider {
     Openai,
 }
 
-fn default_max_tokens() -> u32 {
-    16000
-}
-
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Config {
     /// Explicit provider choice. When unset, it is inferred from which API keys
@@ -60,9 +56,6 @@ pub struct Config {
     /// Model id. If unset, a sensible default is chosen per provider (see `model()`).
     #[serde(default)]
     pub model: Option<String>,
-    /// Max tokens to generate. Required by Anthropic; ignored by the OpenAI path.
-    #[serde(default = "default_max_tokens")]
-    pub max_tokens: u32,
 }
 
 impl Default for Config {
@@ -70,7 +63,6 @@ impl Default for Config {
         Config {
             provider: None,
             model: None,
-            max_tokens: default_max_tokens(),
         }
     }
 }

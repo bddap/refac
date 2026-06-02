@@ -102,7 +102,7 @@ fn refactor(
                     "No Anthropic API key found. Set ANTHROPIC_API_KEY or run 'refac login'."
                 )
             })?;
-            anthropic::complete(key, &model, config.max_tokens, &messages)?
+            anthropic::complete(key, &model, &messages)?
         }
         Provider::Openai => {
             let key = sc.openai_api_key.as_deref().ok_or_else(|| {

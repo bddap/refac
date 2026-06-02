@@ -18,6 +18,11 @@ use serde_json::Value;
 
 use crate::api::Message;
 
+/// `max_tokens` is required by the Messages API. It isn't a user-facing setting
+/// (a config knob that only one provider honors is a representable invalid
+/// state); hardcode a generous ceiling here.
+const MAX_TOKENS: u32 = 16000;
+
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
@@ -86,13 +91,8 @@ struct ResponseBlock {
 /// pairs + the trailing user turns); this splits out the system prompt, merges
 /// consecutive same-role turns to satisfy Anthropic's alternation requirement,
 /// and caches the static prefix.
-pub fn complete(
-    api_key: &str,
-    model: &str,
-    max_tokens: u32,
-    messages: &[Message],
-) -> anyhow::Result<String> {
-    let req = build_request(model, max_tokens, messages);
+pub fn complete(api_key: &str, model: &str, messages: &[Message]) -> anyhow::Result<String> {
+    let req = build_request(model, messages);
 
     tracing::debug!(
         "anthropic request: {}",
@@ -140,7 +140,7 @@ pub fn complete(
     Ok(text)
 }
 
-fn build_request(model: &str, max_tokens: u32, messages: &[Message]) -> MessagesRequest {
+fn build_request(model: &str, messages: &[Message]) -> MessagesRequest {
     let mut system_text = String::new();
     let mut convo: Vec<ChatMessage> = Vec::new();
 
@@ -186,7 +186,7 @@ fn build_request(model: &str, max_tokens: u32, messages: &[Message]) -> Messages
 
     MessagesRequest {
         model: model.to_string(),
-        max_tokens,
+        max_tokens: MAX_TOKENS,
         system,
         messages: convo,
     }
@@ -209,7 +209,7 @@ mod tests {
             Message::user("real_transform"),
         ];
 
-        let req = build_request("claude-opus-4-8", 16000, &msgs);
+        let req = build_request("claude-opus-4-8", &msgs);
         let v = serde_json::to_value(&req).unwrap();
 
         assert_eq!(v["model"], "claude-opus-4-8");
@@ -245,7 +245,7 @@ mod tests {
             Message::user("real input"),
             Message::user(""),
         ];
-        let req = build_request("claude-opus-4-8", 100, &msgs);
+        let req = build_request("claude-opus-4-8", &msgs);
         let v = serde_json::to_value(&req).unwrap();
         // No empty text anywhere.
         let s = serde_json::to_string(&v).unwrap();
@@ -260,7 +260,7 @@ mod tests {
     #[test]
     fn no_system_yields_empty_system() {
         let msgs = vec![Message::user("hi")];
-        let req = build_request("claude-opus-4-8", 100, &msgs);
+        let req = build_request("claude-opus-4-8", &msgs);
         let v = serde_json::to_value(&req).unwrap();
         assert!(v.get("system").is_none()); // skipped when empty
         assert_eq!(v["messages"][0]["role"], "user");
