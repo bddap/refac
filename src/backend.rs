@@ -12,10 +12,10 @@ use crate::openai::Openai;
 /// A resolved model backend — provider, key, and model already settled. Callers
 /// hand it refac's provider-agnostic [`Message`]s and get back the completion.
 ///
-/// Returned as `Box<dyn Backend>` rather than a closed `enum` on purpose:
-/// upcoming tool/function-call edits are an Anthropic-only capability, which a
-/// trait expresses as a separate `Edits` trait that only `Anthropic` implements
-/// — no enum arm that has to fake "unsupported" at runtime. Keep it `dyn`.
+/// Resolved to `Box<dyn Backend>` so call sites depend only on the interface,
+/// never on which provider answered. The trait is where the upcoming tool /
+/// function-call round-trip lands (both providers support it), keeping the
+/// edit loop provider-agnostic.
 pub trait Backend {
     /// Send the conversation and return the model's text output.
     fn complete(&self, messages: &[Message]) -> Result<String>;
