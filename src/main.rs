@@ -1,3 +1,4 @@
+mod agent;
 mod anthropic;
 mod api;
 mod api_client;
