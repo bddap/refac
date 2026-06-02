@@ -1,6 +1,7 @@
 mod anthropic;
 mod api;
 mod api_client;
+mod backend;
 mod config_files;
 mod openai;
 mod prompt;
@@ -109,24 +110,7 @@ fn refactor(
     let provider = config.provider(sc);
     let model = config.model(provider);
 
-    let output = match provider {
-        Provider::Anthropic => {
-            let key = sc.anthropic_api_key.as_deref().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "No Anthropic API key found. Set ANTHROPIC_API_KEY or run 'refac login'."
-                )
-            })?;
-            anthropic::complete(key, &model, &messages)?
-        }
-        Provider::Openai => {
-            let key = sc.openai_api_key.as_deref().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "No OpenAI API key found. Set OPENAI_API_KEY or run 'refac login'."
-                )
-            })?;
-            openai::complete(key, &model, &messages)?
-        }
-    };
+    let output = backend::resolve(provider, &model, sc)?.complete(&messages)?;
 
     log(
         LogEntry {

@@ -7,9 +7,28 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::{Message, Role};
 use crate::api_client::{Client, Endpoint, Req};
+use crate::backend::Backend;
+
+/// The OpenAI backend: an API key and the model to call.
+pub struct Openai {
+    key: String,
+    model: String,
+}
+
+impl Openai {
+    pub fn new(key: String, model: String) -> Self {
+        Openai { key, model }
+    }
+}
+
+impl Backend for Openai {
+    fn complete(&self, messages: &[Message]) -> anyhow::Result<String> {
+        send(&self.key, &self.model, messages)
+    }
+}
 
 /// Send refac's messages to the OpenAI chat-completions API and return the text.
-pub fn complete(api_key: &str, model: &str, messages: &[Message]) -> anyhow::Result<String> {
+fn send(api_key: &str, model: &str, messages: &[Message]) -> anyhow::Result<String> {
     let client = Client::new(api_key);
 
     // OpenAI takes one string per message; sending each field as its own message

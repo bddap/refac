@@ -7,8 +7,27 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::api::{Message, Role};
+use crate::backend::Backend;
 
 const MAX_TOKENS: u32 = 80000;
+
+/// The Anthropic backend: an API key and the model to call.
+pub struct Anthropic {
+    key: String,
+    model: String,
+}
+
+impl Anthropic {
+    pub fn new(key: String, model: String) -> Self {
+        Anthropic { key, model }
+    }
+}
+
+impl Backend for Anthropic {
+    fn complete(&self, messages: &[Message]) -> anyhow::Result<String> {
+        send(&self.key, &self.model, messages)
+    }
+}
 
 /// Anthropic 400s on an empty text block, so render empty fields as a visible
 /// placeholder.
@@ -77,7 +96,7 @@ enum ResponseBlock {
 }
 
 /// Send a chat-style prompt to the Claude Messages API and return the text.
-pub fn complete(api_key: &str, model: &str, messages: &[Message]) -> anyhow::Result<String> {
+fn send(api_key: &str, model: &str, messages: &[Message]) -> anyhow::Result<String> {
     let req = build_request(model, messages);
 
     tracing::debug!(
