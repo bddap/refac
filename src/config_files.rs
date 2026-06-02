@@ -66,16 +66,6 @@ pub enum Provider {
     Openai,
 }
 
-/// How the model returns its changes. `Tool` lets it call the `edit` tool to make
-/// targeted replacements (so it never re-emits the whole selection); `Rewrite` is
-/// the original behavior — the model returns the full modified text.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum EditMode {
-    Tool,
-    Rewrite,
-}
-
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Config {
     /// Explicit provider choice. When unset, it is inferred from which API keys
@@ -85,9 +75,6 @@ pub struct Config {
     /// Model id. If unset, a sensible default is chosen per provider (see `model()`).
     #[serde(default)]
     pub model: Option<String>,
-    /// How the model returns changes. Defaults to `Tool` (see `edit_mode`).
-    #[serde(default)]
-    pub edit_mode: Option<EditMode>,
 }
 
 impl Config {
@@ -107,15 +94,6 @@ impl Config {
         }
         if let Ok(from_env) = std::env::var("REFAC_MODEL") {
             ret.model = Some(from_env);
-        }
-        if let Ok(from_env) = std::env::var("REFAC_EDIT_MODE") {
-            ret.edit_mode = Some(match from_env.to_lowercase().as_str() {
-                "tool" => EditMode::Tool,
-                "rewrite" => EditMode::Rewrite,
-                other => anyhow::bail!(
-                    "invalid REFAC_EDIT_MODE {other:?}; expected \"tool\" or \"rewrite\""
-                ),
-            });
         }
         Ok(ret)
     }
@@ -144,11 +122,6 @@ impl Config {
                 Provider::Openai => "gpt-5.5".to_string(),
             },
         }
-    }
-
-    /// The effective edit mode, defaulting to `Tool`.
-    pub fn edit_mode(&self) -> EditMode {
-        self.edit_mode.unwrap_or(EditMode::Tool)
     }
 }
 
