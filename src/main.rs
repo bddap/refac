@@ -103,6 +103,8 @@ fn refactor(
     config: &Config,
 ) -> anyhow::Result<String> {
     let mut messages = chat_prefix();
+    // chat_prefix() is fixed across calls; only the selected/transform tail varies.
+    let cache_prefix_len = messages.len();
     messages.push(Message::user(&selected));
     messages.push(Message::user(&transform));
 
@@ -116,7 +118,7 @@ fn refactor(
                     "No Anthropic API key found. Set ANTHROPIC_API_KEY or run 'refac login'."
                 )
             })?;
-            anthropic::complete(key, &model, &messages)?
+            anthropic::complete(key, &model, &messages, cache_prefix_len)?
         }
         Provider::Openai => {
             let key = sc.openai_api_key.as_deref().ok_or_else(|| {

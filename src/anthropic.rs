@@ -5,10 +5,11 @@
 //! this module handles:
 //!   - auth via the `x-api-key` header (+ `anthropic-version`), not bearer auth
 //!   - the system prompt is a top-level `system` field, not a `system`-role message
-//!   - messages must alternate user/assistant, so consecutive same-role messages
-//!     (refac sends `user(selected)` + `user(transform)`) are merged into one turn
-//!   - prompt caching: the static system prompt + few-shot examples are marked
-//!     `cache_control: ephemeral` so repeated calls only pay for the varying input
+//!   - consecutive same-role messages (refac sends `user(selected)` +
+//!     `user(transform)`) are grouped into one turn
+//!   - prompt caching: the caller-supplied static prefix (system prompt +
+//!     few-shot examples) is marked `cache_control: ephemeral` so repeated calls
+//!     only pay for the varying input
 
 use std::time::Duration;
 
@@ -87,12 +88,15 @@ struct ResponseBlock {
 
 /// Send a chat-style prompt to the Claude Messages API and return the text.
 ///
-/// `messages` is refac's flat message list (system + few-shot user/assistant
-/// pairs + the trailing user turns); this splits out the system prompt, merges
-/// consecutive same-role turns to satisfy Anthropic's alternation requirement,
-/// and caches the static prefix.
-pub fn complete(api_key: &str, model: &str, messages: &[Message]) -> anyhow::Result<String> {
-    let req = build_request(model, messages);
+/// `messages` is refac's flat message list; the leading `cache_prefix_len` of
+/// them are the static prefix (see `build_request`).
+pub fn complete(
+    api_key: &str,
+    model: &str,
+    messages: &[Message],
+    cache_prefix_len: usize,
+) -> anyhow::Result<String> {
+    let req = build_request(model, messages, cache_prefix_len);
 
     tracing::debug!(
         "anthropic request: {}",
@@ -140,13 +144,22 @@ pub fn complete(api_key: &str, model: &str, messages: &[Message]) -> anyhow::Res
     Ok(text)
 }
 
-fn build_request(model: &str, messages: &[Message]) -> MessagesRequest {
+/// `cache_prefix_len` is the number of leading `messages` the caller considers
+/// static — the prompt-caching breakpoint goes at the end of that prefix. The
+/// caller owns this because only it knows what's fixed vs. per-call; the backend
+/// doesn't infer it from message structure.
+fn build_request(model: &str, messages: &[Message], cache_prefix_len: usize) -> MessagesRequest {
     let mut system_text = String::new();
     let mut convo: Vec<ChatMessage> = Vec::new();
+    // How many `convo` turns came from the cacheable prefix.
+    let mut prefix_turns: Option<usize> = None;
 
-    for m in messages {
-        // Anthropic rejects empty text blocks (some few-shot samples have an empty
-        // `selected`); the OpenAI path tolerated them. Drop empties here.
+    for (i, m) in messages.iter().enumerate() {
+        if i == cache_prefix_len {
+            prefix_turns = Some(convo.len());
+        }
+        // Anthropic 400s on empty text blocks (some few-shot samples have an
+        // empty `selected`); the OpenAI path tolerated them.
         if m.content.is_empty() {
             continue;
         }
@@ -157,31 +170,36 @@ fn build_request(model: &str, messages: &[Message]) -> MessagesRequest {
             system_text.push_str(&m.content);
             continue;
         }
-        // Merge consecutive same-role messages — Anthropic requires alternation,
-        // and refac sends two user turns (selected, then transform) back to back.
+        // Group consecutive same-role messages into one turn (refac sends the
+        // selected text and the transform instruction as two user turns). Never
+        // group across the prefix boundary, so the cached prefix turn can't
+        // absorb varying input.
         match convo.last_mut() {
-            Some(last) if last.role == m.role => last.content.push(TextBlock::new(&m.content)),
+            Some(last) if last.role == m.role && i != cache_prefix_len => {
+                last.content.push(TextBlock::new(&m.content))
+            }
             _ => convo.push(ChatMessage {
                 role: m.role.clone(),
                 content: vec![TextBlock::new(&m.content)],
             }),
         }
     }
+    let prefix_turns = prefix_turns.unwrap_or(convo.len());
 
-    // Cache the static prefix. A breakpoint on the system block caches the system
-    // prompt; a breakpoint on the last few-shot assistant turn caches everything
-    // through the examples (render order is system → messages). The trailing user
-    // input after it stays uncached, which is exactly what varies per call.
     let mut system = Vec::new();
     if !system_text.is_empty() {
         let mut block = TextBlock::new(system_text);
         block.cache_control = Some(CacheControl::ephemeral());
         system.push(block);
     }
-    if let Some(idx) = convo.iter().rposition(|m| m.role == "assistant") {
-        if let Some(block) = convo[idx].content.last_mut() {
-            block.cache_control = Some(CacheControl::ephemeral());
-        }
+    // Cache through the last turn of the prefix; everything after it varies per
+    // call and stays uncached.
+    if let Some(block) = prefix_turns
+        .checked_sub(1)
+        .and_then(|idx| convo.get_mut(idx))
+        .and_then(|turn| turn.content.last_mut())
+    {
+        block.cache_control = Some(CacheControl::ephemeral());
     }
 
     MessagesRequest {
@@ -209,7 +227,7 @@ mod tests {
             Message::user("real_transform"),
         ];
 
-        let req = build_request("claude-opus-4-8", &msgs);
+        let req = build_request("claude-opus-4-8", &msgs, 4);
         let v = serde_json::to_value(&req).unwrap();
 
         assert_eq!(v["model"], "claude-opus-4-8");
@@ -245,7 +263,7 @@ mod tests {
             Message::user("real input"),
             Message::user(""),
         ];
-        let req = build_request("claude-opus-4-8", &msgs);
+        let req = build_request("claude-opus-4-8", &msgs, 3);
         let v = serde_json::to_value(&req).unwrap();
         // No empty text anywhere.
         let s = serde_json::to_string(&v).unwrap();
@@ -260,7 +278,7 @@ mod tests {
     #[test]
     fn no_system_yields_empty_system() {
         let msgs = vec![Message::user("hi")];
-        let req = build_request("claude-opus-4-8", &msgs);
+        let req = build_request("claude-opus-4-8", &msgs, 0);
         let v = serde_json::to_value(&req).unwrap();
         assert!(v.get("system").is_none()); // skipped when empty
         assert_eq!(v["messages"][0]["role"], "user");
