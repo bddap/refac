@@ -94,9 +94,10 @@ pub fn complete(
 ) -> anyhow::Result<String> {
     let req = build_request(model, max_tokens, messages);
 
-    if std::env::var("REFAC_DEBUG").is_ok() {
-        eprintln!("{}", serde_json::to_string_pretty(&req).unwrap_or_default());
-    }
+    tracing::debug!(
+        "anthropic request: {}",
+        serde_json::to_string_pretty(&req).unwrap_or_default()
+    );
 
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(60 * 4))
