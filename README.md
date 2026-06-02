@@ -7,21 +7,9 @@ The workflow:
 - Run the command, write instructions on what you want changed.
 - Enjoy the sassy comments.
 
-This tool calls the Anthropic (Claude) API by default — bring your own API key.
-Use `refac login` to enter it; the key is saved in your home directory for future
-use. See [your API usage](https://console.anthropic.com/settings/usage).
-
-OpenAI is also supported: set `provider = "openai"` in
-`~/.config/refac/config.toml` (or `REFAC_PROVIDER=openai`), then `refac login`.
-
-Config (`~/.config/refac/config.toml`, all optional):
-
-```toml
-provider = "anthropic"    # or "openai"; inferred from your keys when unset
-model = "claude-opus-4-8" # default per provider; or set REFAC_MODEL
-```
-
-Keys may also be supplied via `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` env vars.
+Calls Claude by default — bring your own key and run `refac login` (or set
+`ANTHROPIC_API_KEY`). For OpenAI, set `REFAC_PROVIDER=openai` and `OPENAI_API_KEY`.
+Optional `provider` / `model` config lives in `~/.config/refac/config.toml`.
 
 ## SETUP
 
