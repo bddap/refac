@@ -76,21 +76,12 @@ pub struct Usage {
     pub total_tokens: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Role {
     System,
     User,
     Assistant,
-}
-
-impl Role {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Role::System => "system",
-            Role::User => "user",
-            Role::Assistant => "assistant",
-        }
-    }
 }
 
 /// refac's provider-agnostic chat message. A turn carries one or more text
@@ -143,7 +134,7 @@ pub fn field_or_placeholder(field: &str) -> &str {
 /// A message in OpenAI's chat wire format (single `content` string).
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct OpenAiMessage {
-    pub role: String,
+    pub role: Role,
     pub content: String,
 }
 

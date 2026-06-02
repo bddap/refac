@@ -14,44 +14,24 @@ const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 #[derive(Serialize)]
-#[serde(rename_all = "lowercase")]
-enum BlockType {
-    Text,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "lowercase")]
-enum CacheType {
+#[serde(tag = "type", rename_all = "lowercase")]
+enum CacheControl {
     Ephemeral,
 }
 
 #[derive(Serialize)]
-struct CacheControl {
-    #[serde(rename = "type")]
-    kind: CacheType,
+#[serde(tag = "type", rename_all = "lowercase")]
+enum ContentBlock {
+    Text {
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
+    },
 }
 
-impl CacheControl {
-    fn ephemeral() -> Self {
-        CacheControl {
-            kind: CacheType::Ephemeral,
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct TextBlock {
-    #[serde(rename = "type")]
-    kind: BlockType,
-    text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cache_control: Option<CacheControl>,
-}
-
-impl TextBlock {
-    fn new(text: impl Into<String>) -> Self {
-        TextBlock {
-            kind: BlockType::Text,
+impl ContentBlock {
+    fn text(text: impl Into<String>) -> Self {
+        ContentBlock::Text {
             text: text.into(),
             cache_control: None,
         }
@@ -60,8 +40,8 @@ impl TextBlock {
 
 #[derive(Serialize)]
 struct ChatMessage {
-    role: String,
-    content: Vec<TextBlock>,
+    role: Role,
+    content: Vec<ContentBlock>,
 }
 
 #[derive(Serialize)]
@@ -69,7 +49,7 @@ struct MessagesRequest {
     model: String,
     max_tokens: u32,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    system: Vec<TextBlock>,
+    system: Vec<ContentBlock>,
     messages: Vec<ChatMessage>,
 }
 
@@ -79,11 +59,11 @@ struct MessagesResponse {
 }
 
 #[derive(Deserialize)]
-struct ResponseBlock {
-    #[serde(rename = "type")]
-    kind: String,
-    #[serde(default)]
-    text: String,
+#[serde(tag = "type", rename_all = "lowercase")]
+enum ResponseBlock {
+    Text { text: String },
+    #[serde(other)]
+    Other,
 }
 
 /// Send a chat-style prompt to the Claude Messages API and return the text.
@@ -125,8 +105,10 @@ pub fn complete(api_key: &str, model: &str, messages: &[Message]) -> anyhow::Res
     let text: String = parsed
         .content
         .into_iter()
-        .filter(|b| b.kind == "text")
-        .map(|b| b.text)
+        .filter_map(|b| match b {
+            ResponseBlock::Text { text } => Some(text),
+            ResponseBlock::Other => None,
+        })
         .collect();
 
     if text.is_empty() {
@@ -141,21 +123,21 @@ fn build_request(model: &str, messages: &[Message]) -> MessagesRequest {
     let mut convo: Vec<ChatMessage> = Vec::new();
 
     for m in messages {
-        let mut blocks: Vec<TextBlock> = m
+        let mut blocks: Vec<ContentBlock> = m
             .fields
             .iter()
-            .map(|f| TextBlock::new(field_or_placeholder(f)))
+            .map(|f| ContentBlock::text(field_or_placeholder(f)))
             .collect();
         // A cached turn caches everything up to and including its last block.
         if m.cache {
-            if let Some(block) = blocks.last_mut() {
-                block.cache_control = Some(CacheControl::ephemeral());
+            if let Some(ContentBlock::Text { cache_control, .. }) = blocks.last_mut() {
+                *cache_control = Some(CacheControl::Ephemeral);
             }
         }
         match m.role {
             Role::System => system.extend(blocks),
             Role::User | Role::Assistant => convo.push(ChatMessage {
-                role: m.role.as_str().to_string(),
+                role: m.role,
                 content: blocks,
             }),
         }

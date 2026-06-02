@@ -152,7 +152,7 @@ fn openai_complete(api_key: &str, model: &str, messages: &[Message]) -> anyhow::
         .iter()
         .flat_map(|m| {
             m.fields.iter().map(move |f| OpenAiMessage {
-                role: m.role.as_str().to_string(),
+                role: m.role,
                 content: field_or_placeholder(f).to_string(),
             })
         })
