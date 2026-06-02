@@ -50,7 +50,7 @@ pub enum Provider {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Config {
     /// Explicit provider choice. When unset, it is inferred from which API keys
-    /// are configured (see `resolve_provider`).
+    /// are configured (see `provider`).
     #[serde(default)]
     pub provider: Option<Provider>,
     /// Model id. If unset, a sensible default is chosen per provider (see `model()`).
@@ -91,7 +91,7 @@ impl Config {
     /// Resolve the effective provider. An explicit choice (config file or
     /// `REFAC_PROVIDER`) always wins; otherwise infer from which API keys are
     /// configured, leaning Anthropic when both or neither are present.
-    pub fn resolve_provider(&self, secrets: &Secrets) -> Provider {
+    pub fn provider(&self, secrets: &Secrets) -> Provider {
         if let Some(p) = self.provider {
             return p;
         }
@@ -128,13 +128,11 @@ mod tests {
 
     #[test]
     fn provider_inferred_from_available_keys() {
-        let cfg = Config::default(); // provider unset
-        // Only OpenAI configured -> OpenAI.
-        assert_eq!(cfg.resolve_provider(&secrets(false, true)), Provider::Openai);
-        // Anthropic only, both, or neither -> lean Anthropic.
-        assert_eq!(cfg.resolve_provider(&secrets(true, false)), Provider::Anthropic);
-        assert_eq!(cfg.resolve_provider(&secrets(true, true)), Provider::Anthropic);
-        assert_eq!(cfg.resolve_provider(&secrets(false, false)), Provider::Anthropic);
+        let cfg = Config::default();
+        assert_eq!(cfg.provider(&secrets(false, true)), Provider::Openai);
+        assert_eq!(cfg.provider(&secrets(true, false)), Provider::Anthropic);
+        assert_eq!(cfg.provider(&secrets(true, true)), Provider::Anthropic);
+        assert_eq!(cfg.provider(&secrets(false, false)), Provider::Anthropic);
     }
 
     #[test]
@@ -143,7 +141,6 @@ mod tests {
             provider: Some(Provider::Openai),
             ..Config::default()
         };
-        // Explicit choice wins even when only an Anthropic key is present.
-        assert_eq!(cfg.resolve_provider(&secrets(true, false)), Provider::Openai);
+        assert_eq!(cfg.provider(&secrets(true, false)), Provider::Openai);
     }
 }

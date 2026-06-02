@@ -108,7 +108,7 @@ fn refactor(
     messages.push(Message::user(&selected));
     messages.push(Message::user(&transform));
 
-    let provider = config.resolve_provider(sc);
+    let provider = config.provider(sc);
     let model = config.model(provider);
 
     let output = match provider {
