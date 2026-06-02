@@ -76,34 +76,75 @@ pub struct Usage {
     pub total_tokens: u32,
 }
 
-/// Represents a chat message.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    System,
+    User,
+    Assistant,
+}
+
+impl Role {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Role::System => "system",
+            Role::User => "user",
+            Role::Assistant => "assistant",
+        }
+    }
+}
+
+/// refac's provider-agnostic chat message. A turn carries one or more text
+/// `fields` (a transform turn is `[selected, transform]`); each backend adapts
+/// this to its own wire format. `cache` marks the last turn of a static prefix
+/// so backends that support prompt caching can cache through it.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message {
-    pub role: String,
-    pub content: String,
+    pub role: Role,
+    pub fields: Vec<String>,
+    pub cache: bool,
 }
 
 impl Message {
     pub fn system<S: Into<String>>(content: S) -> Message {
-        Message {
-            role: "system".into(),
-            content: content.into(),
-        }
-    }
-
-    pub fn user<S: Into<String>>(content: S) -> Message {
-        Message {
-            role: "user".into(),
-            content: content.into(),
-        }
+        Message::single(Role::System, content)
     }
 
     pub fn assistant<S: Into<String>>(content: S) -> Message {
+        Message::single(Role::Assistant, content)
+    }
+
+    pub fn user(fields: Vec<String>) -> Message {
         Message {
-            role: "assistant".into(),
-            content: content.into(),
+            role: Role::User,
+            fields,
+            cache: false,
         }
     }
+
+    fn single<S: Into<String>>(role: Role, content: S) -> Message {
+        Message {
+            role,
+            fields: vec![content.into()],
+            cache: false,
+        }
+    }
+}
+
+/// Anthropic 400s on an empty text block, so render empty fields as a visible
+/// placeholder.
+pub fn field_or_placeholder(field: &str) -> &str {
+    if field.is_empty() {
+        "(empty)"
+    } else {
+        field
+    }
+}
+
+/// A message in OpenAI's chat wire format (single `content` string).
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct OpenAiMessage {
+    pub role: String,
+    pub content: String,
 }
 
 /// Represents a request for a chat completion.
@@ -116,7 +157,7 @@ pub struct ChatCompletionRequest {
     /// The ID of the model to use (e.g., "gpt-3.5-turbo").
     pub model: String,
     /// The sequence of chat messages to generate completions for.
-    pub messages: Vec<Message>,
+    pub messages: Vec<OpenAiMessage>,
     /// The sampling temperature to use, between 0 and 2. Higher values make output more random, lower values make it more focused.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
@@ -187,7 +228,7 @@ pub struct ChatChoice {
     /// The index of the chat choice.
     pub index: u32,
     /// The generated message, including the role ("assistant") and content.
-    pub message: Message,
+    pub message: OpenAiMessage,
     /// The reason why the conversation finished, e.g., "stop".
     pub finish_reason: String,
 }

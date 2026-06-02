@@ -5,7 +5,7 @@ mod config_files;
 mod prompt;
 
 use anyhow::Context;
-use api::{ChatCompletionRequest, Message};
+use api::{field_or_placeholder, ChatCompletionRequest, Message, OpenAiMessage};
 use api_client::Client;
 use clap::Parser;
 use config_files::{Config, Provider, Secrets};
@@ -104,9 +104,7 @@ fn refactor(
     config: &Config,
 ) -> anyhow::Result<String> {
     let mut messages = chat_prefix();
-    let cache_prefix_len = messages.len();
-    messages.push(Message::user(&selected));
-    messages.push(Message::user(&transform));
+    messages.push(Message::user(vec![selected.clone(), transform.clone()]));
 
     let provider = config.provider(sc);
     let model = config.model(provider);
@@ -118,7 +116,7 @@ fn refactor(
                     "No Anthropic API key found. Set ANTHROPIC_API_KEY or run 'refac login'."
                 )
             })?;
-            anthropic::complete(key, &model, &messages, cache_prefix_len)?
+            anthropic::complete(key, &model, &messages)?
         }
         Provider::Openai => {
             let key = sc.openai_api_key.as_deref().ok_or_else(|| {
@@ -126,7 +124,7 @@ fn refactor(
                     "No OpenAI API key found. Set OPENAI_API_KEY or run 'refac login'."
                 )
             })?;
-            openai_complete(key, &model, messages)?
+            openai_complete(key, &model, &messages)?
         }
     };
 
@@ -144,8 +142,23 @@ fn refactor(
     Ok(output)
 }
 
-fn openai_complete(api_key: &str, model: &str, messages: Vec<Message>) -> anyhow::Result<String> {
+fn openai_complete(api_key: &str, model: &str, messages: &[Message]) -> anyhow::Result<String> {
     let client = Client::new(api_key);
+
+    // OpenAI takes one string per message, so join a turn's fields with blank
+    // lines. `cache` has no OpenAI equivalent and is dropped.
+    let messages = messages
+        .iter()
+        .map(|m| OpenAiMessage {
+            role: m.role.as_str().to_string(),
+            content: m
+                .fields
+                .iter()
+                .map(|f| field_or_placeholder(f))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        })
+        .collect();
 
     let request = ChatCompletionRequest {
         model: model.to_string(),

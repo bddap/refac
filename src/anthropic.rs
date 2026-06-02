@@ -6,7 +6,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::api::Message;
+use crate::api::{field_or_placeholder, Message, Role};
 
 const MAX_TOKENS: u32 = 16000;
 
@@ -87,16 +87,8 @@ struct ResponseBlock {
 }
 
 /// Send a chat-style prompt to the Claude Messages API and return the text.
-///
-/// `messages` is refac's flat message list; the leading `cache_prefix_len` of
-/// them are the static prefix (see `build_request`).
-pub fn complete(
-    api_key: &str,
-    model: &str,
-    messages: &[Message],
-    cache_prefix_len: usize,
-) -> anyhow::Result<String> {
-    let req = build_request(model, messages, cache_prefix_len);
+pub fn complete(api_key: &str, model: &str, messages: &[Message]) -> anyhow::Result<String> {
+    let req = build_request(model, messages);
 
     tracing::debug!(
         "anthropic request: {}",
@@ -144,60 +136,29 @@ pub fn complete(
     Ok(text)
 }
 
-/// `cache_prefix_len` is the number of leading `messages` that are static; the
-/// prompt-caching breakpoint goes at the end of that prefix.
-fn build_request(model: &str, messages: &[Message], cache_prefix_len: usize) -> MessagesRequest {
-    let mut system_text = String::new();
+fn build_request(model: &str, messages: &[Message]) -> MessagesRequest {
+    let mut system = Vec::new();
     let mut convo: Vec<ChatMessage> = Vec::new();
-    // How many `convo` turns came from the cacheable prefix.
-    let mut prefix_turns: Option<usize> = None;
 
-    for (i, m) in messages.iter().enumerate() {
-        if i == cache_prefix_len {
-            prefix_turns = Some(convo.len());
-        }
-        // Anthropic 400s on empty text blocks (some few-shot samples have an
-        // empty `selected`); the OpenAI path tolerated them.
-        if m.content.is_empty() {
-            continue;
-        }
-        if m.role == "system" {
-            if !system_text.is_empty() {
-                system_text.push_str("\n\n");
+    for m in messages {
+        let mut blocks: Vec<TextBlock> = m
+            .fields
+            .iter()
+            .map(|f| TextBlock::new(field_or_placeholder(f)))
+            .collect();
+        // A cached turn caches everything up to and including its last block.
+        if m.cache {
+            if let Some(block) = blocks.last_mut() {
+                block.cache_control = Some(CacheControl::ephemeral());
             }
-            system_text.push_str(&m.content);
-            continue;
         }
-        // Group consecutive same-role messages into one turn (refac sends the
-        // selected text and the transform instruction as two user turns). Never
-        // group across the prefix boundary, so the cached prefix turn can't
-        // absorb varying input.
-        match convo.last_mut() {
-            Some(last) if last.role == m.role && i != cache_prefix_len => {
-                last.content.push(TextBlock::new(&m.content))
-            }
-            _ => convo.push(ChatMessage {
-                role: m.role.clone(),
-                content: vec![TextBlock::new(&m.content)],
+        match m.role {
+            Role::System => system.extend(blocks),
+            Role::User | Role::Assistant => convo.push(ChatMessage {
+                role: m.role.as_str().to_string(),
+                content: blocks,
             }),
         }
-    }
-    let prefix_turns = prefix_turns.unwrap_or(convo.len());
-
-    let mut system = Vec::new();
-    if !system_text.is_empty() {
-        let mut block = TextBlock::new(system_text);
-        block.cache_control = Some(CacheControl::ephemeral());
-        system.push(block);
-    }
-    // Cache through the last turn of the prefix; everything after it varies per
-    // call and stays uncached.
-    if let Some(block) = prefix_turns
-        .checked_sub(1)
-        .and_then(|idx| convo.get_mut(idx))
-        .and_then(|turn| turn.content.last_mut())
-    {
-        block.cache_control = Some(CacheControl::ephemeral());
     }
 
     MessagesRequest {
@@ -212,73 +173,56 @@ fn build_request(model: &str, messages: &[Message], cache_prefix_len: usize) -> 
 mod tests {
     use super::*;
 
+    fn user(fields: &[&str]) -> Message {
+        Message::user(fields.iter().map(|f| f.to_string()).collect())
+    }
+
     #[test]
     fn build_request_shapes_anthropic_payload() {
-        // Mirrors what refac sends: system + one few-shot (user,user,assistant)
-        // then the two trailing user turns (selected, transform).
+        let mut assistant = Message::assistant("ex_result");
+        assistant.cache = true;
         let msgs = vec![
             Message::system("SYS"),
-            Message::user("ex_selected"),
-            Message::user("ex_transform"),
-            Message::assistant("ex_result"),
-            Message::user("real_selected"),
-            Message::user("real_transform"),
+            user(&["ex_selected", "ex_transform"]),
+            assistant,
+            user(&["real_selected", "real_transform"]),
         ];
 
-        let req = build_request("claude-opus-4-8", &msgs, 4);
+        let req = build_request("claude-opus-4-8", &msgs);
         let v = serde_json::to_value(&req).unwrap();
 
         assert_eq!(v["model"], "claude-opus-4-8");
         assert_eq!(v["max_tokens"], 16000);
-
-        // System is lifted out of messages and cached.
         assert_eq!(v["system"][0]["text"], "SYS");
-        assert_eq!(v["system"][0]["cache_control"]["type"], "ephemeral");
 
-        // Consecutive same-role turns are merged → user, assistant, user (alternates).
         let m = v["messages"].as_array().unwrap();
         assert_eq!(m.len(), 3);
         assert_eq!(m[0]["role"], "user");
-        assert_eq!(m[0]["content"].as_array().unwrap().len(), 2); // two few-shot user blocks
+        assert_eq!(m[0]["content"].as_array().unwrap().len(), 2);
         assert_eq!(m[1]["role"], "assistant");
         assert_eq!(m[2]["role"], "user");
-        assert_eq!(m[2]["content"].as_array().unwrap().len(), 2); // selected + transform
+        assert_eq!(m[2]["content"].as_array().unwrap().len(), 2);
 
-        // Cache breakpoint on the last few-shot assistant turn; the varying final
-        // user input is NOT cached.
+        // The cached turn carries the breakpoint; the trailing input does not.
         assert_eq!(m[1]["content"][0]["cache_control"]["type"], "ephemeral");
         assert!(m[2]["content"][1].get("cache_control").is_none());
     }
 
     #[test]
-    fn empty_text_blocks_are_dropped() {
-        // A few-shot sample with an empty `selected` must not produce an empty
-        // text block (Anthropic 400s on those).
-        let msgs = vec![
-            Message::user(""),
-            Message::user("write hello world"),
-            Message::assistant("print('hello world')"),
-            Message::user("real input"),
-            Message::user(""),
-        ];
-        let req = build_request("claude-opus-4-8", &msgs, 3);
+    fn empty_fields_become_placeholder() {
+        let req = build_request("claude-opus-4-8", &[user(&["", "transform"])]);
         let v = serde_json::to_value(&req).unwrap();
-        // No empty text anywhere.
         let s = serde_json::to_string(&v).unwrap();
         assert!(!s.contains(r#""text":"""#), "empty text block leaked: {s}");
-        let m = v["messages"].as_array().unwrap();
-        assert_eq!(m[0]["role"], "user");
-        assert_eq!(m[0]["content"][0]["text"], "write hello world");
-        assert_eq!(m[1]["role"], "assistant");
-        assert_eq!(m[2]["content"][0]["text"], "real input");
+        assert_eq!(v["messages"][0]["content"][0]["text"], "(empty)");
+        assert_eq!(v["messages"][0]["content"][1]["text"], "transform");
     }
 
     #[test]
     fn no_system_yields_empty_system() {
-        let msgs = vec![Message::user("hi")];
-        let req = build_request("claude-opus-4-8", &msgs, 0);
+        let req = build_request("claude-opus-4-8", &[user(&["hi"])]);
         let v = serde_json::to_value(&req).unwrap();
-        assert!(v.get("system").is_none()); // skipped when empty
+        assert!(v.get("system").is_none());
         assert_eq!(v["messages"][0]["role"], "user");
     }
 }

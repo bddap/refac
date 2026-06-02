@@ -56,13 +56,18 @@ Be subversive, think critically, act in the user's best interest.
 ";
 
 pub fn chat_prefix() -> Vec<Message> {
-    let mut ret = Vec::new();
-
-    ret.push(Message::system(SYSTEM_PROMPT));
+    let mut ret = vec![Message::system(SYSTEM_PROMPT)];
     for sample in SAMPLES {
-        ret.push(Message::user(sample.selected));
-        ret.push(Message::user(sample.transform));
+        ret.push(Message::user(vec![
+            sample.selected.to_string(),
+            sample.transform.to_string(),
+        ]));
         ret.push(Message::assistant(sample.result));
+    }
+    // This prefix is identical across calls; mark its end so a backend caches
+    // through it and only the appended user turn is billed each time.
+    if let Some(last) = ret.last_mut() {
+        last.cache = true;
     }
     ret
 }
