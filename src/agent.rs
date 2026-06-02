@@ -6,6 +6,8 @@
 //! "send the conversation + tools, get back the tool calls"; the real providers
 //! implement it over their wire formats, and tests implement it with a script.
 
+use std::time::Duration;
+
 use anyhow::Result;
 use serde_json::{json, Value};
 
@@ -93,12 +95,15 @@ pub struct ToolResult {
     pub is_error: bool,
 }
 
-/// One assistant turn, abstracted over the provider. `turn` returns the tool
-/// calls the model made (empty = it ended its turn without calling one, i.e. a
-/// natural "done"); `respond` hands the results back for the next turn.
+/// One assistant turn, abstracted over the provider. `results` carries the tool
+/// results from the previous turn's calls (empty on the first turn); the impl
+/// threads them into the conversation, runs one round-trip, and returns this
+/// turn's tool calls (empty = the model ended its turn without calling one, i.e.
+/// a natural "done"). Folding "answer the previous calls" and "take the next
+/// turn" into one step makes it impossible to advance without supplying results
+/// for every outstanding call — which both wire protocols require.
 pub trait Model {
-    fn turn(&mut self) -> Result<Vec<RawCall>>;
-    fn respond(&mut self, results: Vec<ToolResult>) -> Result<()>;
+    fn turn(&mut self, results: Vec<ToolResult>) -> Result<Vec<RawCall>>;
 }
 
 /// Guard rails for the loop.
@@ -136,9 +141,10 @@ pub fn run_with(
 ) -> Result<String> {
     let mut current = original.clone();
     let mut consecutive_failures = 0;
+    let mut pending: Vec<ToolResult> = Vec::new();
 
     for _ in 0..limits.max_turns {
-        let calls = model.turn()?;
+        let calls = model.turn(std::mem::take(&mut pending))?;
         if calls.is_empty() {
             return Ok(current); // model ended its turn without a tool call
         }
@@ -194,10 +200,20 @@ pub fn run_with(
             consecutive_failures = 0;
         }
 
-        model.respond(results)?;
+        // Hand these to the model on the next turn (one result per call).
+        pending = results;
     }
 
     anyhow::bail!("edit loop hit its {}-turn limit", limits.max_turns)
+}
+
+/// A blocking HTTP client with refac's standard timeout, shared by the provider
+/// agents.
+pub fn http_client() -> reqwest::blocking::Client {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(60 * 4))
+        .build()
+        .expect("building HTTP client")
 }
 
 fn ok(id: String, content: String) -> ToolResult {
@@ -237,12 +253,11 @@ mod tests {
     }
 
     impl Model for ScriptedModel {
-        fn turn(&mut self) -> Result<Vec<RawCall>> {
-            Ok(self.turns.next().unwrap_or_default())
-        }
-        fn respond(&mut self, results: Vec<ToolResult>) -> Result<()> {
+        fn turn(&mut self, results: Vec<ToolResult>) -> Result<Vec<RawCall>> {
+            // `results` are the previous turn's tool results, so `seen[i]` holds
+            // the results the model received entering turn `i` (seen[0] is empty).
             self.seen.push(results);
-            Ok(())
+            Ok(self.turns.next().unwrap_or_default())
         }
     }
 
@@ -304,9 +319,9 @@ mod tests {
         ]);
         let out = run(&mut m, "a".into(), &Limits::default()).unwrap();
         assert_eq!(out, "b");
-        // refac told the model the first edit failed.
-        assert!(m.seen[0][0].is_error);
-        assert!(m.seen[0][0].content.contains("could not find"));
+        // refac told the model the first edit failed (delivered entering turn 1).
+        assert!(m.seen[1][0].is_error);
+        assert!(m.seen[1][0].content.contains("could not find"));
     }
 
     #[test]
@@ -318,8 +333,9 @@ mod tests {
         ]);
         let out = run(&mut m, "a".into(), &Limits::default()).unwrap();
         assert_eq!(out, "b");
-        assert_eq!(m.seen[1][0].content, "b");
-        assert!(!m.seen[1][0].is_error);
+        // view ran in turn 1; its result reaches the model entering turn 2.
+        assert_eq!(m.seen[2][0].content, "b");
+        assert!(!m.seen[2][0].is_error);
     }
 
     #[test]
@@ -331,7 +347,8 @@ mod tests {
         ]);
         let out = run(&mut m, "a".into(), &Limits::default()).unwrap();
         assert_eq!(out, "a");
-        assert_eq!(m.seen[1][0].content, "a");
+        // reset ran in turn 1; its result reaches the model entering turn 2.
+        assert_eq!(m.seen[2][0].content, "a");
     }
 
     #[test]
@@ -342,8 +359,8 @@ mod tests {
         ]);
         let out = run(&mut m, "x".into(), &Limits::default()).unwrap();
         assert_eq!(out, "x");
-        assert!(m.seen[0][0].is_error);
-        assert!(m.seen[0][0].content.contains("unknown tool"));
+        assert!(m.seen[1][0].is_error);
+        assert!(m.seen[1][0].content.contains("unknown tool"));
     }
 
     #[test]

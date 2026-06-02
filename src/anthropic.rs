@@ -211,7 +211,7 @@ impl AnthropicAgent {
             match m.role {
                 Role::System => system.extend(blocks),
                 Role::User | Role::Assistant => {
-                    messages.push(json!({ "role": role(m.role), "content": blocks }))
+                    messages.push(json!({ "role": m.role.as_str(), "content": blocks }))
                 }
             }
         }
@@ -228,7 +228,7 @@ impl AnthropicAgent {
         AnthropicAgent {
             key,
             model,
-            client: http_client(),
+            client: crate::agent::http_client(),
             system,
             messages,
             tools,
@@ -251,7 +251,24 @@ impl AnthropicAgent {
 }
 
 impl Model for AnthropicAgent {
-    fn turn(&mut self) -> anyhow::Result<Vec<RawCall>> {
+    fn turn(&mut self, results: Vec<ToolResult>) -> anyhow::Result<Vec<RawCall>> {
+        // Answer the previous turn's tool calls before asking for the next one.
+        if !results.is_empty() {
+            let blocks: Vec<Value> = results
+                .into_iter()
+                .map(|r| {
+                    json!({
+                        "type": "tool_result",
+                        "tool_use_id": r.id,
+                        "content": r.content,
+                        "is_error": r.is_error,
+                    })
+                })
+                .collect();
+            self.messages
+                .push(json!({ "role": "user", "content": blocks }));
+        }
+
         let body = post(&self.client, &self.key, &self.request())?;
         let content = body
             .get("content")
@@ -262,23 +279,6 @@ impl Model for AnthropicAgent {
         self.messages
             .push(json!({ "role": "assistant", "content": content }));
         Ok(calls_from_content(&self.messages.last().unwrap()["content"]))
-    }
-
-    fn respond(&mut self, results: Vec<ToolResult>) -> anyhow::Result<()> {
-        let blocks: Vec<Value> = results
-            .into_iter()
-            .map(|r| {
-                json!({
-                    "type": "tool_result",
-                    "tool_use_id": r.id,
-                    "content": r.content,
-                    "is_error": r.is_error,
-                })
-            })
-            .collect();
-        self.messages
-            .push(json!({ "role": "user", "content": blocks }));
-        Ok(())
     }
 }
 
@@ -297,21 +297,6 @@ fn calls_from_content(content: &Value) -> Vec<RawCall> {
             })
         })
         .collect()
-}
-
-fn role(role: Role) -> &'static str {
-    match role {
-        Role::System => "system",
-        Role::User => "user",
-        Role::Assistant => "assistant",
-    }
-}
-
-fn http_client() -> reqwest::blocking::Client {
-    reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(60 * 4))
-        .build()
-        .expect("building HTTP client")
 }
 
 /// POST a request body to the Messages API, returning the parsed JSON or an

@@ -1,7 +1,6 @@
 //! OpenAI chat-completions backend and its wire types.
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use anyhow::Context;
 use reqwest::Method;
@@ -160,7 +159,7 @@ impl OpenaiAgent {
         let mut messages = Vec::new();
         for m in seed {
             for f in &m.fields {
-                messages.push(json!({ "role": role(m.role), "content": f }));
+                messages.push(json!({ "role": m.role.as_str(), "content": f }));
             }
         }
         let tools = tools
@@ -179,7 +178,7 @@ impl OpenaiAgent {
         OpenaiAgent {
             key,
             model,
-            client: http_client(),
+            client: crate::agent::http_client(),
             messages,
             tools,
         }
@@ -196,20 +195,10 @@ impl OpenaiAgent {
 }
 
 impl Model for OpenaiAgent {
-    fn turn(&mut self) -> anyhow::Result<Vec<RawCall>> {
-        let body = post(&self.client, &self.key, &self.request())?;
-        let message = body["choices"][0]["message"].clone();
-        if message.is_null() {
-            anyhow::bail!("OpenAI response missing a message: {body}");
-        }
-        self.messages.push(message.clone());
-        Ok(calls_from_message(&message))
-    }
-
-    fn respond(&mut self, results: Vec<ToolResult>) -> anyhow::Result<()> {
+    fn turn(&mut self, results: Vec<ToolResult>) -> anyhow::Result<Vec<RawCall>> {
+        // Answer the previous turn's tool calls first. chat-completions has no
+        // error flag on a tool message, so mark failures in the content.
         for r in results {
-            // chat-completions has no error flag on a tool message, so mark
-            // failures in the content the model reads.
             let content = if r.is_error {
                 format!("ERROR: {}", r.content)
             } else {
@@ -221,7 +210,14 @@ impl Model for OpenaiAgent {
                 "content": content,
             }));
         }
-        Ok(())
+
+        let body = post(&self.client, &self.key, &self.request())?;
+        let message = body["choices"][0]["message"].clone();
+        if message.is_null() {
+            anyhow::bail!("OpenAI response missing a message: {body}");
+        }
+        self.messages.push(message.clone());
+        Ok(calls_from_message(&message))
     }
 }
 
@@ -247,21 +243,6 @@ fn calls_from_message(message: &Value) -> Vec<RawCall> {
             })
         })
         .collect()
-}
-
-fn role(role: Role) -> &'static str {
-    match role {
-        Role::System => "system",
-        Role::User => "user",
-        Role::Assistant => "assistant",
-    }
-}
-
-fn http_client() -> reqwest::blocking::Client {
-    reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(60 * 4))
-        .build()
-        .expect("building HTTP client")
 }
 
 fn post(client: &reqwest::blocking::Client, key: &str, req: &Value) -> anyhow::Result<Value> {

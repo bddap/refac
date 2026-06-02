@@ -198,7 +198,9 @@ fn block_anchor(src: &str, old: &str) -> Vec<String> {
                 matched += 1;
             }
         }
-        if considered == 0 || matched * 2 >= considered {
+        // Require some non-empty middle line to actually match — anchors alone
+        // (an all-blank middle) are too weak to trust.
+        if considered > 0 && matched * 2 >= considered {
             out.push(span(src, &src_lines, i, i + n - 1));
         }
     }
@@ -217,7 +219,9 @@ fn whitespace_normalized(src: &str, old: &str) -> Vec<String> {
     let mut from = 0;
     while let Some(rel) = src[from..].find(tokens[0]) {
         let start = from + rel;
-        from = start + 1;
+        // Advance past the first char of this match (not one byte) so the next
+        // search stays on a char boundary even for multi-byte text.
+        from = start + src[start..].chars().next().map_or(1, char::len_utf8);
         let mut pos = start + tokens[0].len();
         let mut ok = true;
         for tok in &tokens[1..] {
@@ -395,6 +399,13 @@ mod tests {
         // model collapsed the run of spaces.
         let got = run("foo    +    bar", "foo + bar", "baz").unwrap();
         assert_eq!(got, "baz");
+    }
+
+    #[test]
+    fn whitespace_normalized_multibyte_no_panic() {
+        // Regression: a non-ASCII first token must not slice mid-char.
+        assert!(matches!(run("α   β", "α x", "z"), Err(EditError::NotFound { .. })));
+        assert_eq!(run("α    +    β", "α + β", "z").unwrap(), "z");
     }
 
     #[test]

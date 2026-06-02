@@ -8,6 +8,17 @@ pub enum Role {
     Assistant,
 }
 
+impl Role {
+    /// The wire string for this role (both providers use the same spellings).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Role::System => "system",
+            Role::User => "user",
+            Role::Assistant => "assistant",
+        }
+    }
+}
+
 /// refac's provider-agnostic chat message. A turn carries one or more text
 /// `fields` (a transform turn is `[selected, transform]`); each backend adapts
 /// this to its own wire format. `cache` marks the last turn of a static prefix
