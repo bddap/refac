@@ -75,8 +75,11 @@ impl Config {
         };
         if let Ok(from_env) = std::env::var("REFAC_PROVIDER") {
             ret.provider = Some(match from_env.to_lowercase().as_str() {
+                "anthropic" => Provider::Anthropic,
                 "openai" => Provider::Openai,
-                _ => Provider::Anthropic,
+                other => anyhow::bail!(
+                    "invalid REFAC_PROVIDER {other:?}; expected \"anthropic\" or \"openai\""
+                ),
             });
         }
         if let Ok(from_env) = std::env::var("REFAC_MODEL") {
@@ -102,13 +105,12 @@ impl Config {
         }
     }
 
-    /// Resolve the model id, defaulting per provider when unset.
     pub fn model(&self, provider: Provider) -> String {
         match &self.model {
             Some(m) => m.clone(),
             None => match provider {
                 Provider::Anthropic => "claude-opus-4-8".to_string(),
-                Provider::Openai => "o1".to_string(),
+                Provider::Openai => "gpt-5.5".to_string(),
             },
         }
     }
