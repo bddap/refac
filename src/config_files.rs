@@ -99,7 +99,6 @@ impl Config {
             secrets.anthropic_api_key.is_some(),
             secrets.openai_api_key.is_some(),
         ) {
-            // Only an OpenAI key -> OpenAI. Anthropic-only, both, or neither -> Anthropic.
             (false, true) => Provider::Openai,
             _ => Provider::Anthropic,
         }
