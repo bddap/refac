@@ -1,8 +1,7 @@
 //! Anthropic (Claude) Messages API backend.
 //!
-//! No official Rust SDK exists, so this talks to the REST API directly with
-//! `reqwest` (blocking, same as the OpenAI client). Differences from OpenAI that
-//! this module handles:
+//! Talks to the REST API directly with `reqwest` (blocking, same as the OpenAI
+//! client). Differences from OpenAI that this module handles:
 //!   - auth via the `x-api-key` header (+ `anthropic-version`), not bearer auth
 //!   - the system prompt is a top-level `system` field, not a `system`-role message
 //!   - consecutive same-role messages (refac sends `user(selected)` +
