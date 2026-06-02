@@ -1,14 +1,4 @@
 //! Anthropic (Claude) Messages API backend.
-//!
-//! Talks to the REST API directly with `reqwest` (blocking, same as the OpenAI
-//! client). Differences from OpenAI that this module handles:
-//!   - auth via the `x-api-key` header (+ `anthropic-version`), not bearer auth
-//!   - the system prompt is a top-level `system` field, not a `system`-role message
-//!   - consecutive same-role messages (refac sends `user(selected)` +
-//!     `user(transform)`) are grouped into one turn
-//!   - prompt caching: the caller-supplied static prefix (system prompt +
-//!     few-shot examples) is marked `cache_control: ephemeral` so repeated calls
-//!     only pay for the varying input
 
 use std::time::Duration;
 
@@ -18,30 +8,41 @@ use serde_json::Value;
 
 use crate::api::Message;
 
-/// `max_tokens` is required by the Messages API. It isn't a user-facing setting
-/// (a config knob that only one provider honors is a representable invalid
-/// state); hardcode a generous ceiling here.
 const MAX_TOKENS: u32 = 16000;
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 #[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+enum BlockType {
+    Text,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+enum CacheType {
+    Ephemeral,
+}
+
+#[derive(Serialize)]
 struct CacheControl {
     #[serde(rename = "type")]
-    kind: &'static str, // "ephemeral"
+    kind: CacheType,
 }
 
 impl CacheControl {
     fn ephemeral() -> Self {
-        CacheControl { kind: "ephemeral" }
+        CacheControl {
+            kind: CacheType::Ephemeral,
+        }
     }
 }
 
 #[derive(Serialize)]
 struct TextBlock {
     #[serde(rename = "type")]
-    kind: &'static str, // "text"
+    kind: BlockType,
     text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     cache_control: Option<CacheControl>,
@@ -50,7 +51,7 @@ struct TextBlock {
 impl TextBlock {
     fn new(text: impl Into<String>) -> Self {
         TextBlock {
-            kind: "text",
+            kind: BlockType::Text,
             text: text.into(),
             cache_control: None,
         }
