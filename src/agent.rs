@@ -106,47 +106,40 @@ pub trait Model {
     fn turn(&mut self, results: Vec<ToolResult>) -> Result<Vec<RawCall>>;
 }
 
-/// Guard rails for the loop.
-pub struct Limits {
-    /// Hard cap on assistant turns, so `view`/`reset` can't spin forever.
-    pub max_turns: usize,
-    /// Give up after this many consecutive turns in which every edit failed —
-    /// the model is stuck and burning tokens.
-    pub max_consecutive_failures: usize,
+/// Default cap on assistant turns.
+pub const DEFAULT_MAX_TURNS: usize = 25;
+
+/// Give up after this many consecutive turns in which every edit failed — the
+/// model is stuck and burning tokens.
+const MAX_CONSECUTIVE_FAILURES: usize = 3;
+
+/// One `edit` attempt and whether it landed — the per-edit failure-rate signal
+/// the caller logs.
+#[derive(Debug)]
+pub struct Attempt {
+    pub edit: Edit,
+    pub error: Option<EditError>,
 }
 
-impl Default for Limits {
-    fn default() -> Self {
-        Limits {
-            max_turns: 25,
-            max_consecutive_failures: 3,
-        }
-    }
+/// What the loop produced: the final text and every edit attempt along the way.
+#[derive(Debug)]
+pub struct Outcome {
+    pub text: String,
+    pub attempts: Vec<Attempt>,
 }
 
-/// The result of one `edit` tool call, reported to the loop's observer so callers
-/// can log a per-edit success/failure signal.
-pub struct EditOutcome<'a> {
-    pub edit: &'a Edit,
-    pub error: Option<&'a EditError>,
-}
-
-/// Run the edit loop over `original`, returning the final text. Every `edit`
-/// attempt is reported to `on_edit`, so callers can log the failure rate.
-pub fn run_with(
-    model: &mut dyn Model,
-    original: String,
-    limits: &Limits,
-    on_edit: &mut dyn FnMut(EditOutcome),
-) -> Result<String> {
+/// Run the edit loop over `original`. `max_turns` caps assistant turns so
+/// `view`/`reset` can't spin forever.
+pub fn run(model: &mut dyn Model, original: String, max_turns: usize) -> Result<Outcome> {
     let mut current = original.clone();
+    let mut attempts = Vec::new();
     let mut consecutive_failures = 0;
     let mut pending: Vec<ToolResult> = Vec::new();
 
-    for _ in 0..limits.max_turns {
+    for _ in 0..max_turns {
         let calls = model.turn(std::mem::take(&mut pending))?;
         if calls.is_empty() {
-            return Ok(current); // model ended its turn without a tool call
+            return Ok(Outcome { text: current, attempts }); // natural "done"
         }
 
         let mut results = Vec::with_capacity(calls.len());
@@ -156,7 +149,7 @@ pub fn run_with(
         for call in calls {
             let RawCall { id, name, args } = call;
             match parse(&name, args) {
-                Ok(Action::Finish) => return Ok(current),
+                Ok(Action::Finish) => return Ok(Outcome { text: current, attempts }),
                 Ok(Action::View) => results.push(ok(id, current.clone())),
                 Ok(Action::Reset) => {
                     current = original.clone();
@@ -164,24 +157,19 @@ pub fn run_with(
                 }
                 Ok(Action::Edit(e)) => {
                     edits_attempted += 1;
-                    match edit::apply(&current, &e) {
+                    let error = match edit::apply(&current, &e) {
                         Ok(next) => {
-                            on_edit(EditOutcome {
-                                edit: &e,
-                                error: None,
-                            });
                             current = next;
                             results.push(ok(id, "ok".into()));
+                            None
                         }
                         Err(err) => {
-                            on_edit(EditOutcome {
-                                edit: &e,
-                                error: Some(&err),
-                            });
                             edits_failed += 1;
                             results.push(err_result(id, err.to_string()));
+                            Some(err)
                         }
-                    }
+                    };
+                    attempts.push(Attempt { edit: e, error });
                 }
                 Err(err) => results.push(err_result(id, err.to_string())),
             }
@@ -191,7 +179,7 @@ pub fn run_with(
         // of pure `view`/`reset` shouldn't count against the model.
         if edits_attempted > 0 && edits_failed == edits_attempted {
             consecutive_failures += 1;
-            if consecutive_failures >= limits.max_consecutive_failures {
+            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
                 anyhow::bail!(
                     "giving up after {consecutive_failures} consecutive turns of failed edits"
                 );
@@ -204,7 +192,7 @@ pub fn run_with(
         pending = results;
     }
 
-    anyhow::bail!("edit loop hit its {}-turn limit", limits.max_turns)
+    anyhow::bail!("edit loop hit its {max_turns}-turn limit")
 }
 
 /// A blocking HTTP client with refac's standard timeout, shared by the provider
@@ -277,10 +265,7 @@ mod tests {
         }
     }
 
-    /// Drive the loop without observing edits.
-    fn run(model: &mut dyn Model, original: String, limits: &Limits) -> Result<String> {
-        run_with(model, original, limits, &mut |_| {})
-    }
+    const TURNS: usize = 25;
 
     #[test]
     fn edit_then_finish() {
@@ -288,7 +273,7 @@ mod tests {
             vec![edit_call("1", "Me like", "I like")],
             vec![call("2", "finish")],
         ]);
-        let out = run(&mut m, "Me like toast.".into(), &Limits::default()).unwrap();
+        let out = run(&mut m, "Me like toast.".into(), TURNS).unwrap().text;
         assert_eq!(out, "I like toast.");
     }
 
@@ -299,7 +284,7 @@ mod tests {
             edit_call("2", "two", "2"),
             call("3", "finish"),
         ]]);
-        let out = run(&mut m, "one two".into(), &Limits::default()).unwrap();
+        let out = run(&mut m, "one two".into(), TURNS).unwrap().text;
         assert_eq!(out, "1 2");
     }
 
@@ -307,7 +292,7 @@ mod tests {
     fn natural_done_without_finish() {
         // second turn has no calls → loop ends with the current buffer.
         let mut m = ScriptedModel::new(vec![vec![edit_call("1", "a", "b")], vec![]]);
-        let out = run(&mut m, "a".into(), &Limits::default()).unwrap();
+        let out = run(&mut m, "a".into(), TURNS).unwrap().text;
         assert_eq!(out, "b");
     }
 
@@ -317,7 +302,7 @@ mod tests {
             vec![edit_call("1", "nope", "x")], // misses
             vec![edit_call("2", "a", "b"), call("3", "finish")],
         ]);
-        let out = run(&mut m, "a".into(), &Limits::default()).unwrap();
+        let out = run(&mut m, "a".into(), TURNS).unwrap().text;
         assert_eq!(out, "b");
         // refac told the model the first edit failed (delivered entering turn 1).
         assert!(m.seen[1][0].is_error);
@@ -331,7 +316,7 @@ mod tests {
             vec![call("2", "view")],
             vec![call("3", "finish")],
         ]);
-        let out = run(&mut m, "a".into(), &Limits::default()).unwrap();
+        let out = run(&mut m, "a".into(), TURNS).unwrap().text;
         assert_eq!(out, "b");
         // view ran in turn 1; its result reaches the model entering turn 2.
         assert_eq!(m.seen[2][0].content, "b");
@@ -345,7 +330,7 @@ mod tests {
             vec![call("2", "reset")],
             vec![call("3", "finish")],
         ]);
-        let out = run(&mut m, "a".into(), &Limits::default()).unwrap();
+        let out = run(&mut m, "a".into(), TURNS).unwrap().text;
         assert_eq!(out, "a");
         // reset ran in turn 1; its result reaches the model entering turn 2.
         assert_eq!(m.seen[2][0].content, "a");
@@ -357,7 +342,7 @@ mod tests {
             vec![call("1", "frobnicate")],
             vec![call("2", "finish")],
         ]);
-        let out = run(&mut m, "x".into(), &Limits::default()).unwrap();
+        let out = run(&mut m, "x".into(), TURNS).unwrap().text;
         assert_eq!(out, "x");
         assert!(m.seen[1][0].is_error);
         assert!(m.seen[1][0].content.contains("unknown tool"));
@@ -370,7 +355,7 @@ mod tests {
             vec![edit_call("2", "nope", "x")],
             vec![edit_call("3", "nope", "x")],
         ]);
-        let err = run(&mut m, "a".into(), &Limits::default()).unwrap_err();
+        let err = run(&mut m, "a".into(), TURNS).unwrap_err();
         assert!(err.to_string().contains("consecutive"));
     }
 
@@ -383,7 +368,7 @@ mod tests {
             vec![edit_call("3", "nope", "x")], // fail 1 again
             vec![edit_call("4", "a", "b"), call("5", "finish")],
         ]);
-        let out = run(&mut m, "a".into(), &Limits::default()).unwrap();
+        let out = run(&mut m, "a".into(), TURNS).unwrap().text;
         assert_eq!(out, "b");
     }
 
@@ -392,11 +377,7 @@ mod tests {
         // never finishes; only views.
         let turns = (0..30).map(|i| vec![call(&i.to_string(), "view")]).collect();
         let mut m = ScriptedModel::new(turns);
-        let limits = Limits {
-            max_turns: 5,
-            ..Limits::default()
-        };
-        let err = run(&mut m, "x".into(), &limits).unwrap_err();
+        let err = run(&mut m, "x".into(), 5).unwrap_err();
         assert!(err.to_string().contains("limit"));
     }
 }

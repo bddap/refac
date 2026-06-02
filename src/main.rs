@@ -111,26 +111,23 @@ fn refactor(
     let tools = agent::tools();
     let mut model_agent = backend::resolve_agent(provider, &model, sc, &seed, &tools)?;
 
+    let outcome = agent::run(model_agent.as_mut(), selected.clone(), agent::DEFAULT_MAX_TURNS)?;
+
     // Log each edit attempt so we can see how often the model's `old` misses —
     // the failure-rate signal.
-    let mut on_edit = |o: agent::EditOutcome| {
+    for attempt in &outcome.attempts {
         let _ = log(
             EditLog {
                 provider,
                 model: model.clone(),
-                old: o.edit.old.clone(),
-                new: o.edit.new.clone(),
-                error: o.error.map(|e| e.to_string()),
+                old: attempt.edit.old.clone(),
+                new: attempt.edit.new.clone(),
+                error: attempt.error.as_ref().map(|e| e.to_string()),
             },
             "edits",
         );
-    };
-    let output = agent::run_with(
-        model_agent.as_mut(),
-        selected.clone(),
-        &agent::Limits::default(),
-        &mut on_edit,
-    )?;
+    }
+    let output = outcome.text;
 
     log(
         LogEntry {

@@ -411,8 +411,10 @@ mod tests {
     #[test]
     fn block_anchor_reworded_middle() {
         let src = "fn f() {\n    let a = compute();\n    let b = a + 1;\n    return b;\n}";
-        // middle lines differ slightly; anchors (first/last) pin it.
-        let old = "fn f() {\n    let a = compute();\n    let b = a + 1;\n    return b;\n}";
+        // The model's `old` got the last middle line wrong (return b -> return
+        // result). Exact and line-trimmed both miss; the first/last anchors plus
+        // a majority of matching middle lines pin the real region.
+        let old = "fn f() {\n    let a = compute();\n    let b = a + 1;\n    return result;\n}";
         let got = run(src, old, "fn f() { 42 }").unwrap();
         assert_eq!(got, "fn f() { 42 }");
     }
