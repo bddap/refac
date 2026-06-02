@@ -47,18 +47,16 @@ pub enum Provider {
     Openai,
 }
 
-fn default_provider() -> Provider {
-    Provider::Anthropic
-}
-
 fn default_max_tokens() -> u32 {
     16000
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Config {
-    #[serde(default = "default_provider")]
-    pub provider: Provider,
+    /// Explicit provider choice. When unset, it is inferred from which API keys
+    /// are configured (see `resolve_provider`).
+    #[serde(default)]
+    pub provider: Option<Provider>,
     /// Model id. If unset, a sensible default is chosen per provider (see `model()`).
     #[serde(default)]
     pub model: Option<String>,
@@ -70,7 +68,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            provider: default_provider(),
+            provider: None,
             model: None,
             max_tokens: default_max_tokens(),
         }
@@ -84,10 +82,10 @@ impl Config {
             None => Config::default(),
         };
         if let Ok(from_env) = std::env::var("REFAC_PROVIDER") {
-            ret.provider = match from_env.to_lowercase().as_str() {
+            ret.provider = Some(match from_env.to_lowercase().as_str() {
                 "openai" => Provider::Openai,
                 _ => Provider::Anthropic,
-            };
+            });
         }
         if let Ok(from_env) = std::env::var("REFAC_MODEL") {
             ret.model = Some(from_env);
@@ -95,14 +93,64 @@ impl Config {
         Ok(ret)
     }
 
+    /// Resolve the effective provider. An explicit choice (config file or
+    /// `REFAC_PROVIDER`) always wins; otherwise infer from which API keys are
+    /// configured, leaning Anthropic when both or neither are present.
+    pub fn resolve_provider(&self, secrets: &Secrets) -> Provider {
+        if let Some(p) = self.provider {
+            return p;
+        }
+        match (
+            secrets.anthropic_api_key.is_some(),
+            secrets.openai_api_key.is_some(),
+        ) {
+            // Only an OpenAI key -> OpenAI. Anthropic-only, both, or neither -> Anthropic.
+            (false, true) => Provider::Openai,
+            _ => Provider::Anthropic,
+        }
+    }
+
     /// Resolve the model id, defaulting per provider when unset.
-    pub fn model(&self) -> String {
+    pub fn model(&self, provider: Provider) -> String {
         match &self.model {
             Some(m) => m.clone(),
-            None => match self.provider {
+            None => match provider {
                 Provider::Anthropic => "claude-opus-4-8".to_string(),
                 Provider::Openai => "o1".to_string(),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn secrets(anthropic: bool, openai: bool) -> Secrets {
+        Secrets {
+            anthropic_api_key: anthropic.then(|| "a".to_string()),
+            openai_api_key: openai.then(|| "o".to_string()),
+        }
+    }
+
+    #[test]
+    fn provider_inferred_from_available_keys() {
+        let cfg = Config::default(); // provider unset
+        // Only OpenAI configured -> OpenAI.
+        assert_eq!(cfg.resolve_provider(&secrets(false, true)), Provider::Openai);
+        // Anthropic only, both, or neither -> lean Anthropic.
+        assert_eq!(cfg.resolve_provider(&secrets(true, false)), Provider::Anthropic);
+        assert_eq!(cfg.resolve_provider(&secrets(true, true)), Provider::Anthropic);
+        assert_eq!(cfg.resolve_provider(&secrets(false, false)), Provider::Anthropic);
+    }
+
+    #[test]
+    fn explicit_provider_overrides_inference() {
+        let cfg = Config {
+            provider: Some(Provider::Openai),
+            ..Config::default()
+        };
+        // Explicit choice wins even when only an Anthropic key is present.
+        assert_eq!(cfg.resolve_provider(&secrets(true, false)), Provider::Openai);
     }
 }

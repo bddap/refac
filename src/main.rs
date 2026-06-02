@@ -54,7 +54,7 @@ fn run() -> anyhow::Result<()> {
         SubCommand::Login => {
             let config = Config::load()?;
             let mut secrets = Secrets::load().unwrap_or_default();
-            match config.provider {
+            match config.resolve_provider(&secrets) {
                 Provider::Anthropic => {
                     println!("https://console.anthropic.com/settings/keys");
                     let api_key = rpassword::prompt_password("Enter your Anthropic API key:")?;
@@ -92,9 +92,10 @@ fn refactor(
     messages.push(Message::user(&selected));
     messages.push(Message::user(&transform));
 
-    let model = config.model();
+    let provider = config.resolve_provider(sc);
+    let model = config.model(provider);
 
-    let output = match config.provider {
+    let output = match provider {
         Provider::Anthropic => {
             let key = sc.anthropic_api_key.as_deref().ok_or_else(|| {
                 anyhow::anyhow!(
@@ -115,7 +116,7 @@ fn refactor(
 
     log(
         LogEntry {
-            provider: format!("{:?}", config.provider),
+            provider: format!("{:?}", provider),
             model,
             selected,
             transform,
