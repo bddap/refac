@@ -35,7 +35,26 @@ impl Secrets {
 
     pub fn save(&self) -> anyhow::Result<()> {
         let path = base()?.place_config_file("secrets.toml")?;
-        fs::write(path, toml::to_string(self)?)?;
+        let contents = toml::to_string(self)?;
+        // Holds the API key in cleartext — keep it owner-only.
+        #[cfg(unix)]
+        {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&path)?
+                .write_all(contents.as_bytes())?;
+            // `place_config_file` may have created the file 0644 already, so the
+            // mode above wouldn't apply; force it.
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        }
+        #[cfg(not(unix))]
+        fs::write(&path, contents)?;
         Ok(())
     }
 }

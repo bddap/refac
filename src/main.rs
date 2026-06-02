@@ -130,7 +130,7 @@ fn refactor(
 
     log(
         LogEntry {
-            provider: format!("{:?}", provider),
+            provider,
             model,
             selected,
             transform,
@@ -159,7 +159,7 @@ fn log_location(title: &str) -> anyhow::Result<PathBuf> {
 
 #[derive(Debug, Serialize)]
 struct LogEntry {
-    provider: String,
+    provider: Provider,
     model: String,
     selected: String,
     transform: String,
