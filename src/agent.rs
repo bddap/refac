@@ -9,7 +9,7 @@
 use anyhow::Result;
 use serde_json::{json, Value};
 
-use crate::edit::{self, Edit};
+use crate::edit::{self, Edit, EditError};
 
 /// A tool exposed to the model: its name, one-line purpose, and JSON-Schema for
 /// the arguments. Providers translate these into their own tool-definition shape.
@@ -119,8 +119,21 @@ impl Default for Limits {
     }
 }
 
-/// Run the edit loop over `original`, returning the final text.
-pub fn run(model: &mut dyn Model, original: String, limits: &Limits) -> Result<String> {
+/// The result of one `edit` tool call, reported to the loop's observer so callers
+/// can log a per-edit success/failure signal.
+pub struct EditOutcome<'a> {
+    pub edit: &'a Edit,
+    pub error: Option<&'a EditError>,
+}
+
+/// Run the edit loop over `original`, returning the final text. Every `edit`
+/// attempt is reported to `on_edit`, so callers can log the failure rate.
+pub fn run_with(
+    model: &mut dyn Model,
+    original: String,
+    limits: &Limits,
+    on_edit: &mut dyn FnMut(EditOutcome),
+) -> Result<String> {
     let mut current = original.clone();
     let mut consecutive_failures = 0;
 
@@ -147,10 +160,18 @@ pub fn run(model: &mut dyn Model, original: String, limits: &Limits) -> Result<S
                     edits_attempted += 1;
                     match edit::apply(&current, &e) {
                         Ok(next) => {
+                            on_edit(EditOutcome {
+                                edit: &e,
+                                error: None,
+                            });
                             current = next;
                             results.push(ok(id, "ok".into()));
                         }
                         Err(err) => {
+                            on_edit(EditOutcome {
+                                edit: &e,
+                                error: Some(&err),
+                            });
                             edits_failed += 1;
                             results.push(err_result(id, err.to_string()));
                         }
@@ -239,6 +260,11 @@ mod tests {
             name: name.into(),
             args: json!({}),
         }
+    }
+
+    /// Drive the loop without observing edits.
+    fn run(model: &mut dyn Model, original: String, limits: &Limits) -> Result<String> {
+        run_with(model, original, limits, &mut |_| {})
     }
 
     #[test]

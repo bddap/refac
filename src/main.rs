@@ -11,7 +11,7 @@ mod prompt;
 use anyhow::Context;
 use api::Message;
 use clap::Parser;
-use config_files::{Config, Provider, Secrets};
+use config_files::{Config, EditMode, Provider, Secrets};
 use serde::Serialize;
 use std::{
     fs::{create_dir_all, OpenOptions},
@@ -106,13 +106,42 @@ fn refactor(
     sc: &Secrets,
     config: &Config,
 ) -> anyhow::Result<String> {
-    let mut messages = chat_prefix();
-    messages.push(Message::user(vec![selected.clone(), transform.clone()]));
-
     let provider = config.provider(sc);
     let model = config.model(provider);
 
-    let output = backend::resolve(provider, &model, sc)?.complete(&messages)?;
+    let output = match config.edit_mode() {
+        EditMode::Rewrite => {
+            let mut messages = chat_prefix();
+            messages.push(Message::user(vec![selected.clone(), transform.clone()]));
+            backend::resolve(provider, &model, sc)?.complete(&messages)?
+        }
+        EditMode::Tool => {
+            let mut seed = prompt::edit_prefix();
+            seed.push(Message::user(vec![selected.clone(), transform.clone()]));
+            let tools = agent::tools();
+            let mut model_agent = backend::resolve_agent(provider, &model, sc, &seed, &tools)?;
+            // Log each edit attempt so we can see how often the model's `old`
+            // misses — the failure-rate signal.
+            let mut on_edit = |o: agent::EditOutcome| {
+                let _ = log(
+                    EditLog {
+                        provider,
+                        model: model.clone(),
+                        old: o.edit.old.clone(),
+                        new: o.edit.new.clone(),
+                        error: o.error.map(|e| e.to_string()),
+                    },
+                    "edits",
+                );
+            };
+            agent::run_with(
+                model_agent.as_mut(),
+                selected.clone(),
+                &agent::Limits::default(),
+                &mut on_edit,
+            )?
+        }
+    };
 
     log(
         LogEntry {
@@ -126,6 +155,17 @@ fn refactor(
     )?;
 
     Ok(output)
+}
+
+/// One `edit` tool attempt, logged to `edits.jsonl`. `error` is `None` on success;
+/// the rate of `Some` is how often the model's `old` failed to match.
+#[derive(Debug, Serialize)]
+struct EditLog {
+    provider: Provider,
+    model: String,
+    old: String,
+    new: String,
+    error: Option<String>,
 }
 
 fn log_location(title: &str) -> anyhow::Result<PathBuf> {
