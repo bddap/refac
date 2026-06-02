@@ -64,8 +64,6 @@ pub fn chat_prefix() -> Vec<Message> {
         ]));
         ret.push(Message::assistant(sample.result));
     }
-    // This prefix is identical across calls; mark its end so a backend caches
-    // through it and only the appended user turn is billed each time.
     if let Some(last) = ret.last_mut() {
         last.cache = true;
     }
