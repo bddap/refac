@@ -145,18 +145,16 @@ fn refactor(
 fn openai_complete(api_key: &str, model: &str, messages: &[Message]) -> anyhow::Result<String> {
     let client = Client::new(api_key);
 
-    // OpenAI takes one string per message, so join a turn's fields with blank
-    // lines. `cache` has no OpenAI equivalent and is dropped.
-    let messages = messages
+    // OpenAI takes one string per message; concatenating a turn's fields would
+    // blur the selected text into the transform with no reliable boundary, so
+    // emit each field as its own message. `cache` has no OpenAI equivalent.
+    let messages: Vec<OpenAiMessage> = messages
         .iter()
-        .map(|m| OpenAiMessage {
-            role: m.role.as_str().to_string(),
-            content: m
-                .fields
-                .iter()
-                .map(|f| field_or_placeholder(f))
-                .collect::<Vec<_>>()
-                .join("\n\n"),
+        .flat_map(|m| {
+            m.fields.iter().map(move |f| OpenAiMessage {
+                role: m.role.as_str().to_string(),
+                content: field_or_placeholder(f).to_string(),
+            })
         })
         .collect();
 
