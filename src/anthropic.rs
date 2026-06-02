@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::api::{field_or_placeholder, Message, Role};
 
-const MAX_TOKENS: u32 = 16000;
+const MAX_TOKENS: u32 = 80000;
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -192,7 +192,7 @@ mod tests {
         let v = serde_json::to_value(&req).unwrap();
 
         assert_eq!(v["model"], "claude-opus-4-8");
-        assert_eq!(v["max_tokens"], 16000);
+        assert_eq!(v["max_tokens"], 80000);
         assert_eq!(v["system"][0]["text"], "SYS");
 
         let m = v["messages"].as_array().unwrap();
