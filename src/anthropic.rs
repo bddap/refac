@@ -144,10 +144,8 @@ pub fn complete(
     Ok(text)
 }
 
-/// `cache_prefix_len` is the number of leading `messages` the caller considers
-/// static — the prompt-caching breakpoint goes at the end of that prefix. The
-/// caller owns this because only it knows what's fixed vs. per-call; the backend
-/// doesn't infer it from message structure.
+/// `cache_prefix_len` is the number of leading `messages` that are static; the
+/// prompt-caching breakpoint goes at the end of that prefix.
 fn build_request(model: &str, messages: &[Message], cache_prefix_len: usize) -> MessagesRequest {
     let mut system_text = String::new();
     let mut convo: Vec<ChatMessage> = Vec::new();
