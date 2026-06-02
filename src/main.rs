@@ -3,6 +3,7 @@ mod api;
 mod api_client;
 mod backend;
 mod config_files;
+mod edit;
 mod openai;
 mod prompt;
 
