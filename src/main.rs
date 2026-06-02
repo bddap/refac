@@ -2,11 +2,11 @@ mod anthropic;
 mod api;
 mod api_client;
 mod config_files;
+mod openai;
 mod prompt;
 
 use anyhow::Context;
-use api::{field_or_placeholder, ChatCompletionRequest, Message, OpenAiMessage};
-use api_client::Client;
+use api::Message;
 use clap::Parser;
 use config_files::{Config, Provider, Secrets};
 use serde::Serialize;
@@ -124,7 +124,7 @@ fn refactor(
                     "No OpenAI API key found. Set OPENAI_API_KEY or run 'refac login'."
                 )
             })?;
-            openai_complete(key, &model, &messages)?
+            openai::complete(key, &model, &messages)?
         }
     };
 
@@ -140,47 +140,6 @@ fn refactor(
     )?;
 
     Ok(output)
-}
-
-fn openai_complete(api_key: &str, model: &str, messages: &[Message]) -> anyhow::Result<String> {
-    let client = Client::new(api_key);
-
-    // OpenAI takes one string per message; concatenating a turn's fields would
-    // blur the selected text into the transform with no reliable boundary, so
-    // emit each field as its own message. `cache` has no OpenAI equivalent.
-    let messages: Vec<OpenAiMessage> = messages
-        .iter()
-        .flat_map(|m| {
-            m.fields.iter().map(move |f| OpenAiMessage {
-                role: m.role,
-                content: field_or_placeholder(f).to_string(),
-            })
-        })
-        .collect();
-
-    let request = ChatCompletionRequest {
-        model: model.to_string(),
-        messages,
-        temperature: None,
-        top_p: None,
-        n: None,
-        stream: None,
-        stop: None,
-        max_tokens: None,
-        presence_penalty: None,
-        frequency_penalty: None,
-        logit_bias: None,
-        user: None,
-    };
-
-    let response = client.request(&request)?;
-
-    response
-        .choices
-        .into_iter()
-        .next()
-        .ok_or(anyhow::anyhow!("No choices returned."))
-        .map(|choice| choice.message.content)
 }
 
 fn log_location(title: &str) -> anyhow::Result<PathBuf> {

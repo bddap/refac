@@ -6,9 +6,19 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::api::{field_or_placeholder, Message, Role};
+use crate::api::{Message, Role};
 
 const MAX_TOKENS: u32 = 80000;
+
+/// Anthropic 400s on an empty text block, so render empty fields as a visible
+/// placeholder.
+fn field_or_placeholder(field: &str) -> &str {
+    if field.is_empty() {
+        "(empty)"
+    } else {
+        field
+    }
+}
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
