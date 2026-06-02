@@ -1,14 +1,15 @@
+mod anthropic;
 mod api;
 mod api_client;
 mod config_files;
+mod openai;
 mod prompt;
 
 use anyhow::Context;
-use api::{ChatCompletionRequest, ChatCompletionResponse};
-use api_client::Client;
+use api::Message;
 use clap::Parser;
-use config_files::{Config, Secrets};
-use serde::{Deserialize, Serialize};
+use config_files::{Config, Provider, Secrets};
+use serde::Serialize;
 use std::{
     fs::{create_dir_all, OpenOptions},
     io::Write,
@@ -17,7 +18,8 @@ use std::{
 };
 use xdg::BaseDirectories;
 
-use crate::{api::Message, prompt::chat_prefix};
+use crate::prompt::chat_prefix;
+
 #[derive(Parser)]
 #[clap(version, author, about)]
 struct Opts {
@@ -27,8 +29,11 @@ struct Opts {
 
 #[derive(Parser)]
 enum SubCommand {
-    /// Save your openai api key for future use.
-    Login,
+    /// Save your API key for future use. Pass `--provider`, or pick one interactively.
+    Login {
+        #[clap(long)]
+        provider: Option<Provider>,
+    },
     /// Apply the instructions encoded in `transform` to the text in `selected`.
     /// Get it? 'refac tor'
     Tor { selected: String, transform: String },
@@ -49,13 +54,34 @@ fn run() -> anyhow::Result<()> {
     let opts: Opts = Opts::parse();
 
     match opts.subcmd {
-        SubCommand::Login => {
-            println!("https://platform.openai.com/account/api-keys");
-            let api_key = rpassword::prompt_password("Enter your OpenAI API key:")?;
-            Secrets {
-                openai_api_key: api_key,
+        SubCommand::Login { provider } => {
+            let mut secrets = Secrets::load().unwrap_or_default();
+            let provider = match provider {
+                Some(p) => p,
+                None => {
+                    let choices = [Provider::Anthropic, Provider::Openai];
+                    let labels: Vec<String> = choices.iter().map(|p| format!("{p:?}")).collect();
+                    let idx = dialoguer::Select::new()
+                        .with_prompt("Which provider?")
+                        .items(&labels)
+                        .default(0)
+                        .interact()?;
+                    choices[idx]
+                }
+            };
+            match provider {
+                Provider::Anthropic => {
+                    println!("https://console.anthropic.com/settings/keys");
+                    let api_key = rpassword::prompt_password("Enter your Anthropic API key:")?;
+                    secrets.anthropic_api_key = Some(api_key);
+                }
+                Provider::Openai => {
+                    println!("https://platform.openai.com/account/api-keys");
+                    let api_key = rpassword::prompt_password("Enter your OpenAI API key:")?;
+                    secrets.openai_api_key = Some(api_key);
+                }
             }
-            .save()?;
+            secrets.save()?;
         }
         SubCommand::Tor {
             selected,
@@ -77,45 +103,43 @@ fn refactor(
     sc: &Secrets,
     config: &Config,
 ) -> anyhow::Result<String> {
-    let client = Client::new(&sc.openai_api_key);
     let mut messages = chat_prefix();
-    messages.push(Message::user(&selected));
-    messages.push(Message::user(&transform));
+    messages.push(Message::user(vec![selected.clone(), transform.clone()]));
 
-    let request = ChatCompletionRequest {
-        model: config.model.clone(),
-        messages,
-        temperature: None,
-        top_p: None,
-        n: None,
-        stream: None,
-        stop: None,
-        max_tokens: None,
-        presence_penalty: None,
-        frequency_penalty: None,
-        logit_bias: None,
-        user: None,
+    let provider = config.provider(sc);
+    let model = config.model(provider);
+
+    let output = match provider {
+        Provider::Anthropic => {
+            let key = sc.anthropic_api_key.as_deref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "No Anthropic API key found. Set ANTHROPIC_API_KEY or run 'refac login'."
+                )
+            })?;
+            anthropic::complete(key, &model, &messages)?
+        }
+        Provider::Openai => {
+            let key = sc.openai_api_key.as_deref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "No OpenAI API key found. Set OPENAI_API_KEY or run 'refac login'."
+                )
+            })?;
+            openai::complete(key, &model, &messages)?
+        }
     };
-
-    let response = client.request(&request)?;
 
     log(
         LogEntry {
-            inp: request,
-            res: response.clone(),
+            provider,
+            model,
+            selected,
+            transform,
+            output: output.clone(),
         },
         "logs",
     )?;
 
-    let transformed_text = response
-        .choices
-        .into_iter()
-        .next()
-        .ok_or(anyhow::anyhow!("No choices returned."))?
-        .message
-        .content;
-
-    Ok(transformed_text)
+    Ok(output)
 }
 
 fn log_location(title: &str) -> anyhow::Result<PathBuf> {
@@ -133,18 +157,13 @@ fn log_location(title: &str) -> anyhow::Result<PathBuf> {
     Ok(ret)
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 struct LogEntry {
-    inp: ChatCompletionRequest,
-    res: ChatCompletionResponse,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct UndiffFailure {
+    provider: Provider,
+    model: String,
     selected: String,
-    diff: String,
     transform: String,
-    err: String,
+    output: String,
 }
 
 fn log<T: Serialize>(t: T, title: &str) -> anyhow::Result<()> {
