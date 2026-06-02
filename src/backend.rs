@@ -14,9 +14,9 @@ use crate::openai::{Openai, OpenaiAgent};
 /// hand it refac's provider-agnostic [`Message`]s and get back the completion.
 ///
 /// Resolved to `Box<dyn Backend>` so call sites depend only on the interface,
-/// never on which provider answered. The trait is where the upcoming tool /
-/// function-call round-trip lands (both providers support it), keeping the
-/// edit loop provider-agnostic.
+/// never on which provider answered. This is the rewrite path (whole-text
+/// output); the tool/function-call edit path is a separate `agent::Model`, built
+/// by [`resolve_agent`].
 pub trait Backend {
     /// Send the conversation and return the model's text output.
     fn complete(&self, messages: &[Message]) -> Result<String>;

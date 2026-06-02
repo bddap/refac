@@ -182,11 +182,10 @@ fn build_request(model: &str, messages: &[Message]) -> MessagesRequest {
 }
 
 /// An edit-mode session against the Messages API. Implements [`Model`]: each
-/// `turn` posts the running conversation plus the tool definitions and returns
-/// the model's tool calls; `respond` threads the results back as a `tool_result`
-/// user turn. The assistant's content is echoed back verbatim (as JSON) on the
-/// next turn, which is what the API requires for a `tool_use`/`tool_result`
-/// exchange.
+/// `turn` first threads the previous turn's results back as a `tool_result` user
+/// turn, posts the running conversation plus the tool definitions, and returns
+/// the model's tool calls. The assistant's content is echoed back verbatim (as
+/// JSON), which is what the API requires for a `tool_use`/`tool_result` exchange.
 pub struct AnthropicAgent {
     key: String,
     model: String,

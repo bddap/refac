@@ -140,10 +140,11 @@ pub struct Usage {
 }
 
 /// An edit-mode session against the chat-completions API. Implements [`Model`]:
-/// each `turn` posts the running conversation plus the function tools and returns
-/// the model's `tool_calls`; `respond` threads results back as `role: "tool"`
-/// messages. The assistant message is echoed verbatim so the `tool_call_id`s line
-/// up — and every tool call gets a result, which the API requires.
+/// each `turn` first threads the previous turn's results back as `role: "tool"`
+/// messages, posts the running conversation plus the function tools, and returns
+/// the model's `tool_calls`. The assistant message is echoed verbatim so the
+/// `tool_call_id`s line up — and every tool call gets a result, which the API
+/// requires.
 pub struct OpenaiAgent {
     key: String,
     model: String,
@@ -155,7 +156,8 @@ pub struct OpenaiAgent {
 impl OpenaiAgent {
     pub fn new(key: String, model: String, seed: &[Message], tools: &[ToolSpec]) -> Self {
         // One message per field keeps the selected/transform boundary, as the
-        // rewrite path does.
+        // rewrite path does. Unlike Anthropic, OpenAI accepts empty content, so
+        // no empty-field placeholder is needed.
         let mut messages = Vec::new();
         for m in seed {
             for f in &m.fields {
