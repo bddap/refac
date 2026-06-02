@@ -60,9 +60,10 @@ fn run() -> anyhow::Result<()> {
                 Some(p) => p,
                 None => {
                     let choices = [Provider::Anthropic, Provider::Openai];
+                    let labels: Vec<String> = choices.iter().map(|p| format!("{p:?}")).collect();
                     let idx = dialoguer::Select::new()
                         .with_prompt("Which provider?")
-                        .items(&["Anthropic", "OpenAI"])
+                        .items(&labels)
                         .default(0)
                         .interact()?;
                     choices[idx]
@@ -103,7 +104,6 @@ fn refactor(
     config: &Config,
 ) -> anyhow::Result<String> {
     let mut messages = chat_prefix();
-    // chat_prefix() is fixed across calls; only the selected/transform tail varies.
     let cache_prefix_len = messages.len();
     messages.push(Message::user(&selected));
     messages.push(Message::user(&transform));
