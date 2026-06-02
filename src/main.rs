@@ -29,8 +29,11 @@ struct Opts {
 
 #[derive(Parser)]
 enum SubCommand {
-    /// Save your API key for future use (for the provider set in config; Anthropic by default).
-    Login,
+    /// Save your API key for future use. Pass `--provider`, or pick one interactively.
+    Login {
+        #[clap(long)]
+        provider: Option<Provider>,
+    },
     /// Apply the instructions encoded in `transform` to the text in `selected`.
     /// Get it? 'refac tor'
     Tor { selected: String, transform: String },
@@ -51,10 +54,21 @@ fn run() -> anyhow::Result<()> {
     let opts: Opts = Opts::parse();
 
     match opts.subcmd {
-        SubCommand::Login => {
-            let config = Config::load()?;
+        SubCommand::Login { provider } => {
             let mut secrets = Secrets::load().unwrap_or_default();
-            match config.resolve_provider(&secrets) {
+            let provider = match provider {
+                Some(p) => p,
+                None => {
+                    let choices = [Provider::Anthropic, Provider::Openai];
+                    let idx = dialoguer::Select::new()
+                        .with_prompt("Which provider?")
+                        .items(&["Anthropic", "OpenAI"])
+                        .default(0)
+                        .interact()?;
+                    choices[idx]
+                }
+            };
+            match provider {
                 Provider::Anthropic => {
                     println!("https://console.anthropic.com/settings/keys");
                     let api_key = rpassword::prompt_password("Enter your Anthropic API key:")?;
