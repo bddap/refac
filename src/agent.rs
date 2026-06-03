@@ -9,7 +9,8 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use serde_json::{json, Value};
+use schemars::JsonSchema;
+use serde_json::Value;
 
 use crate::edit::{self, Edit, EditError};
 
@@ -31,10 +32,20 @@ pub struct ToolSpec {
     pub input_schema: Value,
 }
 
+/// The argument type for the tools that take none. An empty struct so its schema
+/// is generated through the same typed path as `edit`'s, never hand-written.
+#[derive(JsonSchema)]
+struct NoArgs {}
+
+/// The JSON Schema for a tool's arguments, derived from the Rust type the call
+/// deserializes into — so the advertised schema and the parsed type can't drift.
+fn schema_for<T: JsonSchema>() -> Value {
+    serde_json::to_value(schemars::schema_for!(T)).expect("tool arg schema serializes to JSON")
+}
+
 /// The tools refac offers in edit mode. `edit` does the work; the other three
 /// keep the model oriented and let it end cleanly.
 pub fn tools() -> Vec<ToolSpec> {
-    let no_args = || json!({ "type": "object", "properties": {} });
     vec![
         ToolSpec {
             name: "edit",
@@ -43,32 +54,24 @@ pub fn tools() -> Vec<ToolSpec> {
                 `replace_all`. `new` is the replacement — empty to delete; to insert, include \
                 surrounding text in both `old` and `new`. Call this several times in one turn to \
                 make several edits.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "old": { "type": "string", "description": "exact text to replace" },
-                    "new": { "type": "string", "description": "replacement text" },
-                    "replace_all": { "type": "boolean", "description": "replace every occurrence" }
-                },
-                "required": ["old", "new"]
-            }),
+            input_schema: schema_for::<Edit>(),
         },
         ToolSpec {
             name: "view",
             description: "Return the current text, with all edits so far applied. Use it to \
                 re-anchor if you've lost track of the exact contents.",
-            input_schema: no_args(),
+            input_schema: schema_for::<NoArgs>(),
         },
         ToolSpec {
             name: "reset",
             description: "Discard all edits and restore the original selected text. Returns it.",
-            input_schema: no_args(),
+            input_schema: schema_for::<NoArgs>(),
         },
         ToolSpec {
             name: "finish",
             description: "Signal that the transform is complete. refac outputs the current text. \
                 Call this when you're done editing.",
-            input_schema: no_args(),
+            input_schema: schema_for::<NoArgs>(),
         },
     ]
 }
@@ -233,6 +236,7 @@ fn err_result(id: String, content: String) -> ToolResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     /// A model driven by a canned script: each entry is the tool calls for one
     /// turn. It records the results refac sends back so tests can assert on them.

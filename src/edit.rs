@@ -10,17 +10,27 @@
 //! is an error fed back to the model, never a silent mis-apply (the contract
 //! claude-code's str_replace established).
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+// Single source of truth for the `edit` tool: `JsonSchema` derives the wire
+// schema the model is shown, and `Deserialize` parses the model's call back into
+// this same type, so the advertised arguments and the parsed ones can't drift.
+// The doc comments below become the schema's descriptions, so keep them
+// model-facing — `schemars` sends them to the model verbatim.
 
 /// The `edit` tool's arguments: one replacement. `old` is matched against the
 /// current buffer (loosely, via the replacer chain); `new` takes its place.
 /// Empty `new` deletes; insertion is done by including surrounding text in both
 /// `old` and `new`. `replace_all` drops the uniqueness requirement and replaces
 /// every occurrence of the matched candidate.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct Edit {
+    /// exact text to replace
     pub old: String,
+    /// replacement text
     pub new: String,
+    /// replace every occurrence
     #[serde(default)]
     pub replace_all: bool,
 }
