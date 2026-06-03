@@ -13,6 +13,16 @@ use serde_json::{json, Value};
 
 use crate::edit::{self, Edit, EditError};
 
+/// The complete conversation refac sends to start an edit session: the system
+/// prompt plus the user's one `(selected, transform)` turn. This is the *only*
+/// shape refac ever sends, so the agents take it whole instead of a general
+/// message list — the named fields make a malformed conversation unrepresentable.
+pub struct Seed<'a> {
+    pub system: &'a str,
+    pub selected: &'a str,
+    pub transform: &'a str,
+}
+
 /// A tool exposed to the model: its name, one-line purpose, and JSON-Schema for
 /// the arguments. Providers translate these into their own tool-definition shape.
 pub struct ToolSpec {

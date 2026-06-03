@@ -3,8 +3,7 @@
 use anyhow::Context;
 use serde_json::{json, Value};
 
-use crate::agent::{Model, RawCall, ToolResult, ToolSpec};
-use crate::api::Message;
+use crate::agent::{Model, RawCall, Seed, ToolResult, ToolSpec};
 
 const API_URL: &str = "https://api.openai.com/v1/chat/completions";
 
@@ -23,16 +22,14 @@ pub struct OpenaiAgent {
 }
 
 impl OpenaiAgent {
-    pub fn new(key: String, model: String, seed: &[Message], tools: &[ToolSpec]) -> Self {
-        // One message per field keeps the selected/transform boundary, as the
-        // rewrite path does. Unlike Anthropic, OpenAI accepts empty content, so
-        // no empty-field placeholder is needed.
-        let mut messages = Vec::new();
-        for m in seed {
-            for f in &m.fields {
-                messages.push(json!({ "role": m.role.as_str(), "content": f }));
-            }
-        }
+    pub fn new(key: String, model: String, seed: &Seed, tools: &[ToolSpec]) -> Self {
+        // Selected and transform stay separate user messages, keeping the
+        // boundary explicit. OpenAI accepts empty content, so no placeholder.
+        let messages = vec![
+            json!({ "role": "system", "content": seed.system }),
+            json!({ "role": "user", "content": seed.selected }),
+            json!({ "role": "user", "content": seed.transform }),
+        ];
         let tools = tools
             .iter()
             .map(|t| {
@@ -141,10 +138,11 @@ mod tests {
     #[test]
     fn agent_request_uses_function_tools() {
         let tools = crate::agent::tools();
-        let seed = vec![
-            Message::system("SYS"),
-            Message::user(vec!["selected".into(), "transform".into()]),
-        ];
+        let seed = Seed {
+            system: "SYS",
+            selected: "selected",
+            transform: "transform",
+        };
         let agent = OpenaiAgent::new("k".into(), "gpt-5.5".into(), &seed, &tools);
         let req = agent.request();
 

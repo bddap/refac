@@ -1,6 +1,5 @@
 mod agent;
 mod anthropic;
-mod api;
 mod backend;
 mod config_files;
 mod edit;
@@ -8,7 +7,6 @@ mod openai;
 mod prompt;
 
 use anyhow::Context;
-use api::Message;
 use clap::Parser;
 use config_files::{Config, Provider, Secrets};
 use serde::Serialize;
@@ -106,8 +104,11 @@ fn refactor(
     let provider = config.provider(sc);
     let model = config.model(provider);
 
-    let mut seed = prompt::edit_prefix();
-    seed.push(Message::user(vec![selected.clone(), transform.clone()]));
+    let seed = agent::Seed {
+        system: prompt::EDIT_SYSTEM_PROMPT,
+        selected: &selected,
+        transform: &transform,
+    };
     let tools = agent::tools();
     let mut model_agent = backend::resolve_agent(provider, &model, sc, &seed, &tools)?;
 

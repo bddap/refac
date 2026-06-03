@@ -3,8 +3,7 @@
 use anyhow::Context;
 use serde_json::{json, Value};
 
-use crate::agent::{Model, RawCall, ToolResult, ToolSpec};
-use crate::api::{Message, Role};
+use crate::agent::{Model, RawCall, Seed, ToolResult, ToolSpec};
 
 const MAX_TOKENS: u32 = 80000;
 
@@ -36,24 +35,18 @@ pub struct AnthropicAgent {
 }
 
 impl AnthropicAgent {
-    /// Seed from refac's provider-agnostic messages (system + the user turn) and
-    /// the tools to expose.
-    pub fn new(key: String, model: String, seed: &[Message], tools: &[ToolSpec]) -> Self {
-        let mut system = Vec::new();
-        let mut messages = Vec::new();
-        for m in seed {
-            let blocks: Vec<Value> = m
-                .fields
-                .iter()
-                .map(|f| json!({ "type": "text", "text": field_or_placeholder(f) }))
-                .collect();
-            match m.role {
-                Role::System => system.extend(blocks),
-                Role::User | Role::Assistant => {
-                    messages.push(json!({ "role": m.role.as_str(), "content": blocks }))
-                }
-            }
-        }
+    /// Seed from refac's edit conversation and the tools to expose. The system
+    /// prompt goes in the top-level `system`; the user turn carries the selected
+    /// text and the instruction as two text blocks.
+    pub fn new(key: String, model: String, seed: &Seed, tools: &[ToolSpec]) -> Self {
+        let system = vec![json!({ "type": "text", "text": seed.system })];
+        let messages = vec![json!({
+            "role": "user",
+            "content": [
+                { "type": "text", "text": field_or_placeholder(seed.selected) },
+                { "type": "text", "text": field_or_placeholder(seed.transform) },
+            ],
+        })];
         let tools = tools
             .iter()
             .map(|t| {
@@ -165,20 +158,21 @@ fn post(client: &reqwest::blocking::Client, key: &str, req: &Value) -> anyhow::R
 mod tests {
     use super::*;
 
-    fn user(fields: &[&str]) -> Message {
-        Message::user(fields.iter().map(|f| f.to_string()).collect())
-    }
-
     #[test]
     fn agent_request_carries_tools_and_seed() {
         let tools = crate::agent::tools();
-        let seed = vec![Message::system("SYS"), user(&["selected", "transform"])];
+        let seed = Seed {
+            system: "SYS",
+            selected: "selected",
+            transform: "transform",
+        };
         let agent = AnthropicAgent::new("k".into(), "claude-opus-4-8".into(), &seed, &tools);
         let req = agent.request();
 
         assert_eq!(req["system"][0]["text"], "SYS");
         assert_eq!(req["messages"][0]["role"], "user");
         assert_eq!(req["messages"][0]["content"][0]["text"], "selected");
+        assert_eq!(req["messages"][0]["content"][1]["text"], "transform");
         assert_eq!(req["tool_choice"]["type"], "auto");
         let names: Vec<&str> = req["tools"]
             .as_array()

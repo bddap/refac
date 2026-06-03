@@ -2,9 +2,8 @@
 
 use anyhow::Result;
 
-use crate::agent::{Model, ToolSpec};
+use crate::agent::{Model, Seed, ToolSpec};
 use crate::anthropic::AnthropicAgent;
-use crate::api::Message;
 use crate::config_files::{Provider, Secrets};
 use crate::openai::OpenaiAgent;
 
@@ -27,7 +26,7 @@ pub fn resolve_agent(
     provider: Provider,
     model: &str,
     secrets: &Secrets,
-    seed: &[Message],
+    seed: &Seed,
     tools: &[ToolSpec],
 ) -> Result<Box<dyn Model>> {
     let key = key_for(provider, secrets)?;
@@ -45,11 +44,19 @@ mod tests {
         crate::agent::tools()
     }
 
+    fn seed() -> Seed<'static> {
+        Seed {
+            system: "s",
+            selected: "x",
+            transform: "y",
+        }
+    }
+
     #[test]
     fn resolve_agent_errors_without_a_key() {
         let secrets = Secrets::default();
-        assert!(resolve_agent(Provider::Anthropic, "m", &secrets, &[], &tools()).is_err());
-        assert!(resolve_agent(Provider::Openai, "m", &secrets, &[], &tools()).is_err());
+        assert!(resolve_agent(Provider::Anthropic, "m", &secrets, &seed(), &tools()).is_err());
+        assert!(resolve_agent(Provider::Openai, "m", &secrets, &seed(), &tools()).is_err());
     }
 
     #[test]
@@ -58,7 +65,7 @@ mod tests {
             anthropic_api_key: Some("a".into()),
             openai_api_key: Some("o".into()),
         };
-        assert!(resolve_agent(Provider::Anthropic, "m", &secrets, &[], &tools()).is_ok());
-        assert!(resolve_agent(Provider::Openai, "m", &secrets, &[], &tools()).is_ok());
+        assert!(resolve_agent(Provider::Anthropic, "m", &secrets, &seed(), &tools()).is_ok());
+        assert!(resolve_agent(Provider::Openai, "m", &secrets, &seed(), &tools()).is_ok());
     }
 }
