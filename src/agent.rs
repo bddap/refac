@@ -1,78 +1,138 @@
-//! The edit-mode loop: the model drives a small session over the selected text
-//! by calling tools (`edit`, `view`, `reset`, `finish`), refac applies each and
-//! feeds the result back, until the model finishes or a guard trips.
-//!
-//! This module is provider-agnostic and IO-free. A [`Model`] is one turn of
-//! "send the conversation + tools, get back the tool calls"; the real providers
-//! implement it over their wire formats, and tests implement it with a script.
+//! The edit loop: the model calls tools (`edit`, `view`, `reset`, `finish`),
+//! refac applies each, feeds the result back, and repeats until the model
+//! finishes or a guard trips. Provider-agnostic and IO-free — a [`Model`] is one
+//! turn (send the conversation + tools, get back the calls); the providers
+//! implement it over their wire formats, the tests with a script.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::Result;
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema};
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::edit::{self, Edit, EditError};
+use crate::edit::{self, Edit};
 
-/// The complete conversation refac sends to start an edit session: the system
-/// prompt plus the user's one `(selected, transform)` turn. This is the *only*
-/// shape refac ever sends, so the agents take it whole instead of a general
-/// message list — the named fields make a malformed conversation unrepresentable.
+/// The complete conversation refac sends to start a session: the system prompt
+/// plus the user's one `(selected, transform)` turn — the only shape refac ever
+/// sends, so the agents take it whole and a malformed conversation can't be built.
 pub struct Seed<'a> {
     pub system: &'a str,
     pub selected: &'a str,
     pub transform: &'a str,
 }
 
-/// A tool exposed to the model: its name, one-line purpose, and JSON-Schema for
-/// the arguments. Providers translate these into their own tool-definition shape.
-pub struct ToolSpec {
+/// Read-only state a tool may consult beyond the live buffer, so that `tools()`
+/// stays callable before any buffer exists (the providers build it just for the
+/// schemas) and `reset` need not capture the original.
+pub struct Ctx<'a> {
+    original: &'a str,
+}
+
+/// A tool's reply to the model: `Ok` shown as the result, `Err` as an error
+/// result. (The handler's *outer* `Result` is a malformed call instead.)
+type Reply = std::result::Result<String, String>;
+
+/// What one tool call does to the loop. `Finish` ends it; `Continue` replies to
+/// the model and, for `edit`, carries the [`Attempt`] to log — so each tool owns
+/// its whole behavior and `run` needs no per-tool special cases.
+enum Step {
+    Continue { reply: Reply, attempt: Option<Attempt> },
+    Finish,
+}
+
+impl Step {
+    fn reply(reply: Reply) -> Step {
+        Step::Continue {
+            reply,
+            attempt: None,
+        }
+    }
+}
+
+type Handler = Box<dyn Fn(&mut String, &Ctx, Value) -> Result<Step>>;
+
+/// One tool offered to the model. [`Tool::new`] binds the schema and the handler
+/// to a single args type, so what's advertised and what's parsed can't drift.
+pub struct Tool {
     pub name: &'static str,
     pub description: &'static str,
-    pub input_schema: Value,
+    pub input_schema: Schema,
+    run: Handler,
 }
 
-/// The argument type for the tools that take none. An empty struct so its schema
-/// is generated through the same typed path as `edit`'s, never hand-written.
-#[derive(JsonSchema)]
+impl Tool {
+    fn new<A: JsonSchema + DeserializeOwned + 'static>(
+        name: &'static str,
+        description: &'static str,
+        handler: impl Fn(&mut String, &Ctx, A) -> Step + 'static,
+    ) -> Tool {
+        Tool {
+            name,
+            description,
+            input_schema: schemars::schema_for!(A),
+            run: Box::new(move |buf, ctx, args| Ok(handler(buf, ctx, serde_json::from_value(args)?))),
+        }
+    }
+}
+
+/// The args type for the tools that take none — an empty struct so its schema
+/// comes from the same typed path as `edit`'s.
+#[derive(JsonSchema, serde::Deserialize)]
 struct NoArgs {}
 
-/// The JSON Schema for a tool's arguments, derived from the Rust type the call
-/// deserializes into — so the advertised schema and the parsed type can't drift.
-fn schema_for<T: JsonSchema>() -> Value {
-    serde_json::to_value(schemars::schema_for!(T)).expect("tool arg schema serializes to JSON")
-}
-
-/// The tools refac offers in edit mode. `edit` does the work; the other three
-/// keep the model oriented and let it end cleanly.
-pub fn tools() -> Vec<ToolSpec> {
+/// The tools refac offers. `edit` does the work; `view`/`reset` keep the model
+/// oriented; `finish` ends the loop.
+pub fn tools() -> Vec<Tool> {
     vec![
-        ToolSpec {
-            name: "edit",
-            description: "Replace an exact substring of the selected text. Copy `old` verbatim \
+        Tool::new::<Edit>(
+            "edit",
+            "Replace an exact substring of the selected text. Copy `old` verbatim \
                 (whitespace and indentation included); make it long enough to be unique, or set \
                 `replace_all`. `new` is the replacement — empty to delete; to insert, include \
                 surrounding text in both `old` and `new`. Call this several times in one turn to \
                 make several edits.",
-            input_schema: schema_for::<Edit>(),
-        },
-        ToolSpec {
-            name: "view",
-            description: "Return the current text, with all edits so far applied. Use it to \
-                re-anchor if you've lost track of the exact contents.",
-            input_schema: schema_for::<NoArgs>(),
-        },
-        ToolSpec {
-            name: "reset",
-            description: "Discard all edits and restore the original selected text. Returns it.",
-            input_schema: schema_for::<NoArgs>(),
-        },
-        ToolSpec {
-            name: "finish",
-            description: "Signal that the transform is complete. refac outputs the current text. \
-                Call this when you're done editing.",
-            input_schema: schema_for::<NoArgs>(),
-        },
+            |buf, _ctx, e: Edit| match edit::apply(buf, &e) {
+                Ok(next) => {
+                    *buf = next;
+                    Step::Continue {
+                        reply: Ok("ok".into()),
+                        attempt: Some(Attempt { edit: e, error: None }),
+                    }
+                }
+                Err(err) => {
+                    let msg = err.to_string();
+                    Step::Continue {
+                        reply: Err(msg.clone()),
+                        attempt: Some(Attempt {
+                            edit: e,
+                            error: Some(msg),
+                        }),
+                    }
+                }
+            },
+        ),
+        Tool::new::<NoArgs>(
+            "view",
+            "Return the current text, with all edits so far applied. Use it to re-anchor if \
+                you've lost track of the exact contents.",
+            |buf, _ctx, _: NoArgs| Step::reply(Ok(buf.clone())),
+        ),
+        Tool::new::<NoArgs>(
+            "reset",
+            "Discard all edits and restore the original selected text. Returns it.",
+            |buf, ctx, _: NoArgs| {
+                *buf = ctx.original.to_owned();
+                Step::reply(Ok(buf.clone()))
+            },
+        ),
+        Tool::new::<NoArgs>(
+            "finish",
+            "Signal that the transform is complete. refac outputs the current text. Call this \
+                when you're done editing.",
+            |_buf, _ctx, _: NoArgs| Step::Finish,
+        ),
     ]
 }
 
@@ -83,24 +143,6 @@ pub struct RawCall {
     pub args: Value,
 }
 
-/// A parsed, understood tool call.
-enum Action {
-    Edit(Edit),
-    View,
-    Reset,
-    Finish,
-}
-
-fn parse(name: &str, args: Value) -> Result<Action> {
-    match name {
-        "edit" => Ok(Action::Edit(serde_json::from_value(args)?)),
-        "view" => Ok(Action::View),
-        "reset" => Ok(Action::Reset),
-        "finish" => Ok(Action::Finish),
-        other => anyhow::bail!("unknown tool {other:?}"),
-    }
-}
-
 /// What refac sends back for one tool call.
 pub struct ToolResult {
     pub id: String,
@@ -108,30 +150,27 @@ pub struct ToolResult {
     pub is_error: bool,
 }
 
-/// One assistant turn, abstracted over the provider. `results` carries the tool
-/// results from the previous turn's calls (empty on the first turn); the impl
-/// threads them into the conversation, runs one round-trip, and returns this
-/// turn's tool calls (empty = the model ended its turn without calling one, i.e.
-/// a natural "done"). Folding "answer the previous calls" and "take the next
-/// turn" into one step makes it impossible to advance without supplying results
-/// for every outstanding call — which both wire protocols require.
+/// One assistant turn, abstracted over the provider. `results` are the previous
+/// turn's tool results (empty on the first turn) and an empty return means the
+/// model ended its turn without a call (a natural "done"). Folding "answer the
+/// previous calls" and "take the next turn" into one step makes it impossible to
+/// advance without a result for every outstanding call, which both wire protocols
+/// require.
 pub trait Model {
     fn turn(&mut self, results: Vec<ToolResult>) -> Result<Vec<RawCall>>;
 }
 
-/// Default cap on assistant turns.
 pub const DEFAULT_MAX_TURNS: usize = 25;
 
 /// Give up after this many consecutive turns in which every edit failed — the
 /// model is stuck and burning tokens.
 const MAX_CONSECUTIVE_FAILURES: usize = 3;
 
-/// One `edit` attempt and whether it landed — the per-edit failure-rate signal
-/// the caller logs.
+/// One `edit` attempt and whether it landed, for the caller's failure-rate log.
 #[derive(Debug)]
 pub struct Attempt {
     pub edit: Edit,
-    pub error: Option<EditError>,
+    pub error: Option<String>,
 }
 
 /// What the loop produced: the final text and every edit attempt along the way.
@@ -144,6 +183,12 @@ pub struct Outcome {
 /// Run the edit loop over `original`. `max_turns` caps assistant turns so
 /// `view`/`reset` can't spin forever.
 pub fn run(model: &mut dyn Model, original: String, max_turns: usize) -> Result<Outcome> {
+    let tools = tools();
+    let by_name: HashMap<&str, &Tool> = tools.iter().map(|t| (t.name, t)).collect();
+    let ctx = Ctx {
+        original: &original,
+    };
+
     let mut current = original.clone();
     let mut attempts = Vec::new();
     let mut consecutive_failures = 0;
@@ -152,40 +197,47 @@ pub fn run(model: &mut dyn Model, original: String, max_turns: usize) -> Result<
     for _ in 0..max_turns {
         let calls = model.turn(std::mem::take(&mut pending))?;
         if calls.is_empty() {
-            return Ok(Outcome { text: current, attempts }); // natural "done"
+            return Ok(Outcome {
+                text: current,
+                attempts,
+            });
         }
 
         let mut results = Vec::with_capacity(calls.len());
         let mut edits_attempted = 0;
         let mut edits_failed = 0;
 
-        for call in calls {
-            let RawCall { id, name, args } = call;
-            match parse(&name, args) {
-                Ok(Action::Finish) => return Ok(Outcome { text: current, attempts }),
-                Ok(Action::View) => results.push(ok(id, current.clone())),
-                Ok(Action::Reset) => {
-                    current = original.clone();
-                    results.push(ok(id, current.clone()));
+        for RawCall { id, name, args } in calls {
+            let step = match by_name.get(name.as_str()) {
+                Some(tool) => (tool.run)(&mut current, &ctx, args),
+                None => Err(anyhow::anyhow!("unknown tool {name:?}")),
+            };
+
+            let (reply, attempt) = match step {
+                Ok(Step::Finish) => {
+                    return Ok(Outcome {
+                        text: current,
+                        attempts,
+                    })
                 }
-                Ok(Action::Edit(e)) => {
-                    edits_attempted += 1;
-                    let error = match edit::apply(&current, &e) {
-                        Ok(next) => {
-                            current = next;
-                            results.push(ok(id, "ok".into()));
-                            None
-                        }
-                        Err(err) => {
-                            edits_failed += 1;
-                            results.push(err_result(id, err.to_string()));
-                            Some(err)
-                        }
-                    };
-                    attempts.push(Attempt { edit: e, error });
+                Ok(Step::Continue { reply, attempt }) => (reply, attempt),
+                // A malformed call (args that didn't deserialize) is reported to
+                // the model like any other tool error, not a fatal loop error.
+                Err(err) => (Err(err.to_string()), None),
+            };
+
+            if let Some(attempt) = attempt {
+                edits_attempted += 1;
+                if attempt.error.is_some() {
+                    edits_failed += 1;
                 }
-                Err(err) => results.push(err_result(id, err.to_string())),
+                attempts.push(attempt);
             }
+
+            results.push(match reply {
+                Ok(content) => ok(id, content),
+                Err(msg) => err_result(id, msg),
+            });
         }
 
         // A turn "fails" only if it tried to edit and every edit missed; a turn
@@ -201,15 +253,13 @@ pub fn run(model: &mut dyn Model, original: String, max_turns: usize) -> Result<
             consecutive_failures = 0;
         }
 
-        // Hand these to the model on the next turn (one result per call).
         pending = results;
     }
 
     anyhow::bail!("edit loop hit its {max_turns}-turn limit")
 }
 
-/// A blocking HTTP client with refac's standard timeout, shared by the provider
-/// agents.
+/// A blocking HTTP client with refac's standard timeout, shared by the agents.
 pub fn http_client() -> reqwest::blocking::Client {
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(60 * 4))

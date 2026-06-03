@@ -105,7 +105,7 @@ fn refactor(
     let model = config.model(provider);
 
     let seed = agent::Seed {
-        system: prompt::EDIT_SYSTEM_PROMPT,
+        system: prompt::SYSTEM_PROMPT,
         selected: &selected,
         transform: &transform,
     };

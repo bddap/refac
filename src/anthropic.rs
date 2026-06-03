@@ -3,7 +3,7 @@
 use anyhow::Context;
 use serde_json::{json, Value};
 
-use crate::agent::{Model, RawCall, Seed, ToolResult, ToolSpec};
+use crate::agent::{Model, RawCall, Seed, Tool, ToolResult};
 
 const MAX_TOKENS: u32 = 80000;
 
@@ -38,7 +38,7 @@ impl AnthropicAgent {
     /// Seed from refac's edit conversation and the tools to expose. The system
     /// prompt goes in the top-level `system`; the user turn carries the selected
     /// text and the instruction as two text blocks.
-    pub fn new(key: String, model: String, seed: &Seed, tools: &[ToolSpec]) -> Self {
+    pub fn new(key: String, model: String, seed: &Seed, tools: &[Tool]) -> Self {
         let system = vec![json!({ "type": "text", "text": seed.system })];
         let messages = vec![json!({
             "role": "user",

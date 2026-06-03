@@ -3,7 +3,7 @@
 use anyhow::Context;
 use serde_json::{json, Value};
 
-use crate::agent::{Model, RawCall, Seed, ToolResult, ToolSpec};
+use crate::agent::{Model, RawCall, Seed, Tool, ToolResult};
 
 const API_URL: &str = "https://api.openai.com/v1/chat/completions";
 
@@ -22,9 +22,7 @@ pub struct OpenaiAgent {
 }
 
 impl OpenaiAgent {
-    pub fn new(key: String, model: String, seed: &Seed, tools: &[ToolSpec]) -> Self {
-        // Selected and transform stay separate user messages, keeping the
-        // boundary explicit. OpenAI accepts empty content, so no placeholder.
+    pub fn new(key: String, model: String, seed: &Seed, tools: &[Tool]) -> Self {
         let messages = vec![
             json!({ "role": "system", "content": seed.system }),
             json!({ "role": "user", "content": seed.selected }),

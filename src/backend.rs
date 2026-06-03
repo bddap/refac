@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 
-use crate::agent::{Model, Seed, ToolSpec};
+use crate::agent::{Model, Seed, Tool};
 use crate::anthropic::AnthropicAgent;
 use crate::config_files::{Provider, Secrets};
 use crate::openai::OpenaiAgent;
@@ -27,7 +27,7 @@ pub fn resolve_agent(
     model: &str,
     secrets: &Secrets,
     seed: &Seed,
-    tools: &[ToolSpec],
+    tools: &[Tool],
 ) -> Result<Box<dyn Model>> {
     let key = key_for(provider, secrets)?;
     Ok(match provider {
@@ -40,7 +40,7 @@ pub fn resolve_agent(
 mod tests {
     use super::*;
 
-    fn tools() -> Vec<ToolSpec> {
+    fn tools() -> Vec<Tool> {
         crate::agent::tools()
     }
 
