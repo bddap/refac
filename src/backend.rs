@@ -1,5 +1,7 @@
 //! Turning a `Provider` choice into a ready-to-run, key-bearing edit-mode model.
 
+use std::time::Duration;
+
 use anyhow::Result;
 
 use crate::agent::{Model, Seed, Tool};
@@ -7,12 +9,13 @@ use crate::anthropic::AnthropicAgent;
 use crate::config_files::{Provider, Secrets};
 use crate::openai::OpenaiAgent;
 
-/// The one spot that knows how each provider sources its API key. Fails if the
-/// chosen provider's key is missing, so the rest of refac stays provider-agnostic.
+/// The one spot that knows how each provider sources its API key.
 fn key_for(provider: Provider, secrets: &Secrets) -> Result<String> {
     match provider {
         Provider::Anthropic => secrets.anthropic_api_key.clone().ok_or_else(|| {
-            anyhow::anyhow!("No Anthropic API key found. Set ANTHROPIC_API_KEY or run 'refac login'.")
+            anyhow::anyhow!(
+                "No Anthropic API key found. Set ANTHROPIC_API_KEY or run 'refac login'."
+            )
         }),
         Provider::Openai => secrets.openai_api_key.clone().ok_or_else(|| {
             anyhow::anyhow!("No OpenAI API key found. Set OPENAI_API_KEY or run 'refac login'.")
@@ -20,8 +23,6 @@ fn key_for(provider: Provider, secrets: &Secrets) -> Result<String> {
     }
 }
 
-/// Build an edit-mode [`Model`] for the provider, seeded with the conversation
-/// and the tools to expose.
 pub fn resolve_agent(
     provider: Provider,
     model: &str,
@@ -34,6 +35,13 @@ pub fn resolve_agent(
         Provider::Anthropic => Box::new(AnthropicAgent::new(key, model.to_string(), seed, tools)),
         Provider::Openai => Box::new(OpenaiAgent::new(key, model.to_string(), seed, tools)),
     })
+}
+
+pub fn http_client() -> reqwest::blocking::Client {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(60 * 4))
+        .build()
+        .expect("building HTTP client")
 }
 
 #[cfg(test)]

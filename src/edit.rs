@@ -13,17 +13,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-// Single source of truth for the `edit` tool: `JsonSchema` derives the wire
-// schema the model is shown, and `Deserialize` parses the model's call back into
-// this same type, so the advertised arguments and the parsed ones can't drift.
-// The doc comments below become the schema's descriptions, so keep them
-// model-facing — `schemars` sends them to the model verbatim.
-
-/// The `edit` tool's arguments: one replacement. `old` is matched against the
-/// current buffer (loosely, via the replacer chain); `new` takes its place.
-/// Empty `new` deletes; insertion is done by including surrounding text in both
-/// `old` and `new`. `replace_all` drops the uniqueness requirement and replaces
-/// every occurrence of the matched candidate.
+// `schemars` turns the field doc comments below into the model-facing JSON-schema
+// descriptions, so they're verbatim model instructions, not narration for readers.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct Edit {
     /// exact text to replace
@@ -35,17 +26,11 @@ pub struct Edit {
     pub replace_all: bool,
 }
 
-/// Why an edit couldn't be applied. Carries enough to tell the model what went
-/// wrong (fed back as a tool result) and to log a failure-rate signal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditError {
-    /// `old` matched nothing, even after fuzzy fallback.
     NotFound { old: String },
-    /// `old` matched more than once and `replace_all` wasn't set.
     Ambiguous { old: String, count: usize },
-    /// `old == new`; the edit would do nothing.
     NoChange { old: String },
-    /// `old` was empty; there's nothing to anchor a replacement to.
     EmptyOld,
 }
 
@@ -73,10 +58,9 @@ impl std::fmt::Display for EditError {
 
 impl std::error::Error for EditError {}
 
-/// Apply one edit to `src`, returning the new text. Matching walks the replacer
-/// chain (exact first) and requires a unique hit unless `replace_all`. The driver
-/// calls this once per tool call; when the model emits several edits in a turn it
-/// folds this over them, so a later edit sees the text an earlier one produced.
+/// Walks the replacer chain (exact first) and requires a unique hit unless
+/// `replace_all`. Folded over a turn's edits, so a later edit sees what an
+/// earlier one produced.
 pub fn apply(src: &str, edit: &Edit) -> Result<String, EditError> {
     if edit.old.is_empty() {
         return Err(EditError::EmptyOld);
@@ -137,12 +121,10 @@ const CHAIN: &[Replacer] = &[
     indentation_flexible,
 ];
 
-/// `old`, verbatim.
 fn simple(_src: &str, old: &str) -> Vec<String> {
     vec![old.to_string()]
 }
 
-/// Split a string into (byte offset, line content) pairs, dropping the `\n`.
 fn lines_with_offsets(s: &str) -> Vec<(usize, &str)> {
     let mut out = Vec::new();
     let mut start = 0;
@@ -153,8 +135,6 @@ fn lines_with_offsets(s: &str) -> Vec<(usize, &str)> {
     out
 }
 
-/// The exact `src` text spanning source lines `i..=k` (newline-joined, no
-/// trailing newline).
 fn span(src: &str, lines: &[(usize, &str)], i: usize, k: usize) -> String {
     let start = lines[i].0;
     let end = lines[k].0 + lines[k].1.len();
@@ -272,7 +252,6 @@ fn indentation_flexible(src: &str, old: &str) -> Vec<String> {
     out
 }
 
-/// Remove the longest leading-whitespace prefix common to all non-empty lines.
 fn dedent(lines: &[&str]) -> Vec<String> {
     let indent = lines
         .iter()
@@ -280,15 +259,11 @@ fn dedent(lines: &[&str]) -> Vec<String> {
         .map(|l| l.len() - l.trim_start().len())
         .min()
         .unwrap_or(0);
+    // `indent` is the min byte-width across lines, so on a given line it can land
+    // mid-char (multi-byte leading whitespace) — `get` declines that, no panic.
     lines
         .iter()
-        .map(|l| {
-            if l.len() >= indent {
-                l[indent..].to_string()
-            } else {
-                l.to_string()
-            }
-        })
+        .map(|l| l.get(indent..).unwrap_or(l).to_string())
         .collect()
 }
 
@@ -319,7 +294,10 @@ mod tests {
 
     #[test]
     fn exact_substring() {
-        assert_eq!(run("Me like toast.", "Me like", "I like").unwrap(), "I like toast.");
+        assert_eq!(
+            run("Me like toast.", "Me like", "I like").unwrap(),
+            "I like toast."
+        );
     }
 
     #[test]
@@ -327,7 +305,6 @@ mod tests {
         // a later edit can target text an earlier edit produced.
         let edits = vec![edit("foo", "bar"), edit("bar", "baz")];
         assert_eq!(apply_seq("foo", &edits).unwrap(), "baz");
-        // independent targets apply cleanly in sequence.
         let edits = vec![edit("one", "1"), edit("two", "2")];
         assert_eq!(apply_seq("one two", &edits).unwrap(), "1 2");
     }
@@ -340,12 +317,18 @@ mod tests {
             "def add(a, b):\n    \"\"\"Sum.\"\"\"",
         )
         .unwrap();
-        assert_eq!(got, "def add(a, b):\n    \"\"\"Sum.\"\"\"\n    return a + b\n");
+        assert_eq!(
+            got,
+            "def add(a, b):\n    \"\"\"Sum.\"\"\"\n    return a + b\n"
+        );
     }
 
     #[test]
     fn deletion_via_empty_new() {
-        assert_eq!(run("hello cruel world", " cruel", "").unwrap(), "hello world");
+        assert_eq!(
+            run("hello cruel world", " cruel", "").unwrap(),
+            "hello world"
+        );
     }
 
     #[test]
@@ -381,12 +364,14 @@ mod tests {
 
     #[test]
     fn noop_rejected() {
-        assert!(matches!(run("hello", "hello", "hello"), Err(EditError::NoChange { .. })));
+        assert!(matches!(
+            run("hello", "hello", "hello"),
+            Err(EditError::NoChange { .. })
+        ));
     }
 
     #[test]
     fn line_trimmed_tolerates_indent_drift() {
-        // model dropped the leading indentation in `old`.
         let src = "fn main() {\n        let x = 1;\n}\n";
         let got = run(src, "let x = 1;", "let x = 2;").unwrap();
         assert_eq!(got, "fn main() {\n        let x = 2;\n}\n");
@@ -406,7 +391,6 @@ mod tests {
 
     #[test]
     fn whitespace_normalized_reflow() {
-        // model collapsed the run of spaces.
         let got = run("foo    +    bar", "foo + bar", "baz").unwrap();
         assert_eq!(got, "baz");
     }
@@ -414,7 +398,10 @@ mod tests {
     #[test]
     fn whitespace_normalized_multibyte_no_panic() {
         // Regression: a non-ASCII first token must not slice mid-char.
-        assert!(matches!(run("α   β", "α x", "z"), Err(EditError::NotFound { .. })));
+        assert!(matches!(
+            run("α   β", "α x", "z"),
+            Err(EditError::NotFound { .. })
+        ));
         assert_eq!(run("α    +    β", "α + β", "z").unwrap(), "z");
     }
 

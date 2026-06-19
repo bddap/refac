@@ -68,11 +68,8 @@ pub enum Provider {
 
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Config {
-    /// Explicit provider choice. When unset, it is inferred from which API keys
-    /// are configured (see `provider`).
     #[serde(default)]
     pub provider: Option<Provider>,
-    /// Model id. If unset, a sensible default is chosen per provider (see `model()`).
     #[serde(default)]
     pub model: Option<String>,
 }
@@ -98,9 +95,8 @@ impl Config {
         Ok(ret)
     }
 
-    /// Resolve the effective provider. An explicit choice (config file or
-    /// `REFAC_PROVIDER`) always wins; otherwise infer from which API keys are
-    /// configured, leaning Anthropic when both or neither are present.
+    /// An explicit choice wins; otherwise infer from the configured keys, leaning
+    /// Anthropic when both or neither are present.
     pub fn provider(&self, secrets: &Secrets) -> Provider {
         if let Some(p) = self.provider {
             return p;

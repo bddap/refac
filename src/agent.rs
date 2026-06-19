@@ -5,7 +5,6 @@
 //! implement it over their wire formats, the tests with a script.
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use anyhow::Result;
 use schemars::{JsonSchema, Schema};
@@ -22,9 +21,8 @@ pub struct Seed<'a> {
     pub transform: &'a str,
 }
 
-/// Read-only state a tool may consult beyond the live buffer, so that `tools()`
-/// stays callable before any buffer exists (the providers build it just for the
-/// schemas) and `reset` need not capture the original.
+/// Read-only state a tool may consult beyond the live buffer, so `reset` need not
+/// close over the original.
 pub struct Ctx<'a> {
     original: &'a str,
 }
@@ -37,7 +35,10 @@ type Reply = std::result::Result<String, String>;
 /// the model and, for `edit`, carries the [`Attempt`] to log — so each tool owns
 /// its whole behavior and `run` needs no per-tool special cases.
 enum Step {
-    Continue { reply: Reply, attempt: Option<Attempt> },
+    Continue {
+        reply: Reply,
+        attempt: Option<Attempt>,
+    },
     Finish,
 }
 
@@ -71,7 +72,9 @@ impl Tool {
             name,
             description,
             input_schema: schemars::schema_for!(A),
-            run: Box::new(move |buf, ctx, args| Ok(handler(buf, ctx, serde_json::from_value(args)?))),
+            run: Box::new(move |buf, ctx, args| {
+                Ok(handler(buf, ctx, serde_json::from_value(args)?))
+            }),
         }
     }
 }
@@ -93,7 +96,10 @@ pub fn tools() -> Vec<Tool> {
                     *buf = next;
                     Step::Continue {
                         reply: Ok("ok".into()),
-                        attempt: Some(Attempt { edit: e, error: None }),
+                        attempt: Some(Attempt {
+                            edit: e,
+                            error: None,
+                        }),
                     }
                 }
                 Err(err) => {
@@ -143,12 +149,10 @@ pub struct ToolResult {
     pub is_error: bool,
 }
 
-/// One assistant turn, abstracted over the provider. `results` are the previous
-/// turn's tool results (empty on the first turn) and an empty return means the
-/// model ended its turn without a call (a natural "done"). Folding "answer the
-/// previous calls" and "take the next turn" into one step makes it impossible to
-/// advance without a result for every outstanding call, which both wire protocols
-/// require.
+/// One assistant turn. Folding "answer the previous calls" and "take the next
+/// turn" into one step makes it impossible to advance without a result for every
+/// outstanding call, which both wire protocols require. `results` is empty on the
+/// first turn; an empty return means the model stopped without a call (done).
 pub trait Model {
     fn turn(&mut self, results: Vec<ToolResult>) -> Result<Vec<RawCall>>;
 }
@@ -159,7 +163,6 @@ pub const DEFAULT_MAX_TURNS: usize = 25;
 /// model is stuck and burning tokens.
 const MAX_CONSECUTIVE_FAILURES: usize = 3;
 
-/// One `edit` attempt and whether it landed, for the caller's failure-rate log.
 #[derive(Debug)]
 pub struct Attempt {
     pub edit: Edit,
@@ -251,13 +254,6 @@ pub fn run(model: &mut dyn Model, original: String, max_turns: usize) -> Result<
     anyhow::bail!("edit loop hit its {max_turns}-turn limit")
 }
 
-pub fn http_client() -> reqwest::blocking::Client {
-    reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(60 * 4))
-        .build()
-        .expect("building HTTP client")
-}
-
 fn ok(id: String, content: String) -> ToolResult {
     ToolResult {
         id,
@@ -345,7 +341,6 @@ mod tests {
 
     #[test]
     fn natural_done_without_finish() {
-        // second turn has no calls → loop ends with the current buffer.
         let mut m = ScriptedModel::new(vec![vec![edit_call("1", "a", "b")], vec![]]);
         let out = run(&mut m, "a".into(), TURNS).unwrap().text;
         assert_eq!(out, "b");
@@ -359,7 +354,6 @@ mod tests {
         ]);
         let out = run(&mut m, "a".into(), TURNS).unwrap().text;
         assert_eq!(out, "b");
-        // refac told the model the first edit failed (delivered entering turn 1).
         assert!(m.seen[1][0].is_error);
         assert!(m.seen[1][0].content.contains("could not find"));
     }
@@ -373,7 +367,6 @@ mod tests {
         ]);
         let out = run(&mut m, "a".into(), TURNS).unwrap().text;
         assert_eq!(out, "b");
-        // view ran in turn 1; its result reaches the model entering turn 2.
         assert_eq!(m.seen[2][0].content, "b");
         assert!(!m.seen[2][0].is_error);
     }
@@ -387,7 +380,6 @@ mod tests {
         ]);
         let out = run(&mut m, "a".into(), TURNS).unwrap().text;
         assert_eq!(out, "a");
-        // reset ran in turn 1; its result reaches the model entering turn 2.
         assert_eq!(m.seen[2][0].content, "a");
     }
 
@@ -416,11 +408,10 @@ mod tests {
 
     #[test]
     fn pure_view_turns_do_not_count_as_failures() {
-        // interleave a failing edit with views; failures aren't consecutive.
         let mut m = ScriptedModel::new(vec![
-            vec![edit_call("1", "nope", "x")], // fail 1
-            vec![call("2", "view")],           // resets the streak
-            vec![edit_call("3", "nope", "x")], // fail 1 again
+            vec![edit_call("1", "nope", "x")],
+            vec![call("2", "view")], // resets the streak
+            vec![edit_call("3", "nope", "x")],
             vec![edit_call("4", "a", "b"), call("5", "finish")],
         ]);
         let out = run(&mut m, "a".into(), TURNS).unwrap().text;
@@ -429,8 +420,9 @@ mod tests {
 
     #[test]
     fn hits_turn_limit() {
-        // never finishes; only views.
-        let turns = (0..30).map(|i| vec![call(&i.to_string(), "view")]).collect();
+        let turns = (0..30)
+            .map(|i| vec![call(&i.to_string(), "view")])
+            .collect();
         let mut m = ScriptedModel::new(turns);
         let err = run(&mut m, "x".into(), 5).unwrap_err();
         assert!(err.to_string().contains("limit"));

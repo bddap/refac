@@ -1,6 +1,7 @@
 //! OpenAI chat-completions API edit-mode agent.
 
 use anyhow::Context;
+use schemars::Schema;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -28,15 +29,12 @@ enum Message {
         tool_call_id: String,
         content: String,
     },
-    /// The assistant turn is echoed back verbatim as the API returned it
-    /// (`"role"` included). It stays raw `Value` for byte-fidelity:
-    /// re-serializing parsed fields would reorder them and drop ones refac
-    /// doesn't model, and the next request's `tool_calls`/`tool_call_id`
-    /// handshake depends on it matching.
+    /// Echoed back as raw `Value` (its `"role"` included): re-serializing parsed
+    /// fields would reorder them and drop ones refac doesn't model that the next
+    /// `tool_calls`/`tool_call_id` handshake depends on.
     Assistant(Value),
 }
 
-/// A chat-completions message role. Serializes to its lowercase name.
 #[derive(Serialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 enum Role {
@@ -45,7 +43,7 @@ enum Role {
     Tool,
 }
 
-/// A tool definition as chat-completions takes it: a function wrapper.
+/// chat-completions wraps each tool in a `{"type":"function", ...}` envelope.
 #[derive(Serialize)]
 struct ToolDef {
     #[serde(rename = "type")]
@@ -53,8 +51,7 @@ struct ToolDef {
     function: FunctionDef,
 }
 
-/// Serializes to the literal `"function"` so a `ToolDef` can't carry any other
-/// `type`.
+/// A unit enum so the `type` field can only ever serialize to `"function"`.
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
 enum FunctionType {
@@ -65,15 +62,9 @@ enum FunctionType {
 struct FunctionDef {
     name: String,
     description: String,
-    parameters: Value,
+    parameters: Schema,
 }
 
-/// An edit-mode session against the chat-completions API. Implements [`Model`]:
-/// each `turn` first threads the previous turn's results back as `role: "tool"`
-/// messages, posts the running conversation plus the function tools, and returns
-/// the model's `tool_calls`. The assistant message is echoed verbatim so the
-/// `tool_call_id`s line up — and every tool call gets a result, which the API
-/// requires.
 pub struct OpenaiAgent {
     key: String,
     model: String,
@@ -82,8 +73,6 @@ pub struct OpenaiAgent {
     tools: Vec<ToolDef>,
 }
 
-/// The request body POSTed to chat-completions. Borrows the agent's running
-/// state so building it never clones the conversation.
 #[derive(Serialize)]
 struct Request<'a> {
     model: &'a str,
@@ -115,15 +104,14 @@ impl OpenaiAgent {
                 function: FunctionDef {
                     name: t.name.to_string(),
                     description: t.description.to_string(),
-                    parameters: serde_json::to_value(&t.input_schema)
-                        .expect("tool schema serializes"),
+                    parameters: t.input_schema.clone(),
                 },
             })
             .collect();
         OpenaiAgent {
             key,
             model,
-            client: crate::agent::http_client(),
+            client: crate::backend::http_client(),
             messages,
             tools,
         }
@@ -167,8 +155,7 @@ impl Model for OpenaiAgent {
     }
 }
 
-/// Pull `tool_calls` out of an assistant message; each `arguments` is a JSON
-/// string to parse.
+/// chat-completions delivers each call's `arguments` as a JSON *string*, so parse it.
 fn calls_from_message(message: &Value) -> Vec<RawCall> {
     message
         .get("tool_calls")

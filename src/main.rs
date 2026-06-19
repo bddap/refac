@@ -112,7 +112,11 @@ fn refactor(
     let tools = agent::tools();
     let mut model_agent = backend::resolve_agent(provider, &model, sc, &seed, &tools)?;
 
-    let outcome = agent::run(model_agent.as_mut(), selected.clone(), agent::DEFAULT_MAX_TURNS)?;
+    let outcome = agent::run(
+        model_agent.as_mut(),
+        selected.clone(),
+        agent::DEFAULT_MAX_TURNS,
+    )?;
 
     // Log each edit attempt so we can see how often the model's `old` misses —
     // the failure-rate signal.
@@ -144,8 +148,6 @@ fn refactor(
     Ok(output)
 }
 
-/// One `edit` tool attempt, logged to `edits.jsonl`. `error` is `None` on success;
-/// the rate of `Some` is how often the model's `old` failed to match.
 #[derive(Debug, Serialize)]
 struct EditLog {
     provider: Provider,
@@ -164,7 +166,6 @@ fn log_location(title: &str) -> anyhow::Result<PathBuf> {
         tracing::debug!("Logging to {:?}", bd.get_data_home());
     });
 
-    // ensure the parent directory exists
     ret.parent().map(create_dir_all).transpose()?;
 
     Ok(ret)

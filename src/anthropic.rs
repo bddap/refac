@@ -1,6 +1,7 @@
 //! Anthropic (Claude) Messages API edit-mode agent.
 
 use anyhow::Context;
+use schemars::Schema;
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -21,7 +22,6 @@ fn field_or_placeholder(field: &str) -> &str {
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
-/// A `system` prompt block. The API only takes text blocks here.
 #[derive(Serialize)]
 struct SystemBlock {
     #[serde(rename = "type")]
@@ -29,16 +29,13 @@ struct SystemBlock {
     text: String,
 }
 
-/// Serializes to the literal `"text"` so a `SystemBlock`/`ContentBlock::Text`
-/// can't carry any other `type`.
+/// A unit enum so the `type` field can only ever serialize to `"text"`.
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
 enum TextType {
     Text,
 }
 
-/// One block in a message's `content` array. Tagged by `type` as the Messages
-/// API expects: `text`, `tool_use`, `tool_result`.
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ContentBlock {
@@ -52,37 +49,41 @@ enum ContentBlock {
     },
 }
 
-/// One conversation turn. The role tags the JSON (`"role": "user"` /
-/// `"assistant"`), so a role can't be paired with the wrong content.
+/// The `role` tag keeps a role from pairing with the wrong content shape.
 #[derive(Serialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
 enum Message {
     User {
         content: Vec<ContentBlock>,
     },
-    /// The assistant turn is echoed back verbatim as the API returned it. It
-    /// stays raw `Value` for byte-fidelity: re-serializing parsed blocks would
-    /// reorder fields and drop ones refac doesn't model (e.g. `thinking`
-    /// signatures), which the next request's `tool_use`/`tool_result` handshake
-    /// depends on.
+    /// Echoed back as raw `Value`: re-serializing parsed blocks would reorder
+    /// fields and drop ones refac doesn't model (e.g. `thinking` signatures) that
+    /// the next `tool_use`/`tool_result` handshake depends on.
     Assistant {
         content: Value,
     },
 }
 
-/// A tool definition as the Messages API takes it.
 #[derive(Serialize)]
 struct ToolDef {
     name: String,
     description: String,
-    input_schema: Value,
+    input_schema: Schema,
 }
 
-/// An edit-mode session against the Messages API. Implements [`Model`]: each
-/// `turn` first threads the previous turn's results back as a `tool_result` user
-/// turn, posts the running conversation plus the tool definitions, and returns
-/// the model's tool calls. The assistant's content is echoed back verbatim,
-/// which is what the API requires for a `tool_use`/`tool_result` exchange.
+/// Serializes to `{"type":"auto"}`: let the model decide whether to call a tool.
+#[derive(Serialize)]
+struct ToolChoiceAuto {
+    #[serde(rename = "type")]
+    kind: AutoType,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum AutoType {
+    Auto,
+}
+
 pub struct AnthropicAgent {
     key: String,
     model: String,
@@ -92,23 +93,18 @@ pub struct AnthropicAgent {
     tools: Vec<ToolDef>,
 }
 
-/// The request body POSTed to the Messages API. Borrows the agent's running
-/// state so building it never clones the conversation.
 #[derive(Serialize)]
 struct Request<'a> {
     model: &'a str,
     max_tokens: u32,
     messages: &'a [Message],
     tools: &'a [ToolDef],
-    tool_choice: Value,
+    tool_choice: ToolChoiceAuto,
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     system: &'a [SystemBlock],
 }
 
 impl AnthropicAgent {
-    /// Seed from refac's edit conversation and the tools to expose. The system
-    /// prompt goes in the top-level `system`; the user turn carries the selected
-    /// text and the instruction as two text blocks.
     pub fn new(key: String, model: String, seed: &Seed, tools: &[Tool]) -> Self {
         let system = vec![SystemBlock {
             kind: TextType::Text,
@@ -129,14 +125,13 @@ impl AnthropicAgent {
             .map(|t| ToolDef {
                 name: t.name.to_string(),
                 description: t.description.to_string(),
-                input_schema: serde_json::to_value(&t.input_schema)
-                    .expect("tool schema serializes"),
+                input_schema: t.input_schema.clone(),
             })
             .collect();
         AnthropicAgent {
             key,
             model,
-            client: crate::agent::http_client(),
+            client: crate::backend::http_client(),
             system,
             messages,
             tools,
@@ -149,7 +144,9 @@ impl AnthropicAgent {
             max_tokens: MAX_TOKENS,
             messages: &self.messages,
             tools: &self.tools,
-            tool_choice: json!({ "type": "auto" }),
+            tool_choice: ToolChoiceAuto {
+                kind: AutoType::Auto,
+            },
             system: &self.system,
         }
     }
@@ -176,14 +173,13 @@ impl Model for AnthropicAgent {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("Anthropic response missing content: {body}"))?;
         let calls = calls_from_content(&content);
-        // Echo the assistant turn back so the next request carries the tool_use
-        // blocks the tool_results will refer to.
+        // The echoed assistant turn carries the tool_use blocks the next turn's
+        // tool_results refer to.
         self.messages.push(Message::Assistant { content });
         Ok(calls)
     }
 }
 
-/// Pull the `tool_use` blocks out of an assistant content array.
 fn calls_from_content(content: &Value) -> Vec<RawCall> {
     content
         .as_array()
@@ -200,8 +196,6 @@ fn calls_from_content(content: &Value) -> Vec<RawCall> {
         .collect()
 }
 
-/// POST a request body to the Messages API, returning the parsed JSON or an
-/// error carrying the status and body.
 fn post(client: &reqwest::blocking::Client, key: &str, req: &Request) -> anyhow::Result<Value> {
     tracing::debug!(
         "anthropic request: {}",
