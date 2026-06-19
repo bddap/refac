@@ -1,11 +1,72 @@
 //! OpenAI chat-completions API edit-mode agent.
 
 use anyhow::Context;
-use serde_json::{json, Value};
+use serde::Serialize;
+use serde_json::Value;
 
 use crate::agent::{Model, RawCall, Seed, Tool, ToolResult};
 
 const API_URL: &str = "https://api.openai.com/v1/chat/completions";
+
+/// One chat-completions message. `untagged` because the assistant variant is a
+/// whole verbatim message object that already carries its own `"role"` — a
+/// `tag = "role"` discriminant would emit `role` twice. The constructed
+/// variants spell their role out instead.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum Message {
+    System {
+        role: Role,
+        content: String,
+    },
+    User {
+        role: Role,
+        content: String,
+    },
+    Tool {
+        role: Role,
+        tool_call_id: String,
+        content: String,
+    },
+    /// The assistant turn is echoed back verbatim as the API returned it
+    /// (`"role"` included). It stays raw `Value` for byte-fidelity:
+    /// re-serializing parsed fields would reorder them and drop ones refac
+    /// doesn't model, and the next request's `tool_calls`/`tool_call_id`
+    /// handshake depends on it matching.
+    Assistant(Value),
+}
+
+/// A chat-completions message role. Serializes to its lowercase name.
+#[derive(Serialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum Role {
+    System,
+    User,
+    Tool,
+}
+
+/// A tool definition as chat-completions takes it: a function wrapper.
+#[derive(Serialize)]
+struct ToolDef {
+    #[serde(rename = "type")]
+    kind: FunctionType,
+    function: FunctionDef,
+}
+
+/// Serializes to the literal `"function"` so a `ToolDef` can't carry any other
+/// `type`.
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum FunctionType {
+    Function,
+}
+
+#[derive(Serialize)]
+struct FunctionDef {
+    name: String,
+    description: String,
+    parameters: Value,
+}
 
 /// An edit-mode session against the chat-completions API. Implements [`Model`]:
 /// each `turn` first threads the previous turn's results back as `role: "tool"`
@@ -17,28 +78,46 @@ pub struct OpenaiAgent {
     key: String,
     model: String,
     client: reqwest::blocking::Client,
-    messages: Vec<Value>,
-    tools: Vec<Value>,
+    messages: Vec<Message>,
+    tools: Vec<ToolDef>,
+}
+
+/// The request body POSTed to chat-completions. Borrows the agent's running
+/// state so building it never clones the conversation.
+#[derive(Serialize)]
+struct Request<'a> {
+    model: &'a str,
+    messages: &'a [Message],
+    tools: &'a [ToolDef],
+    tool_choice: &'static str,
 }
 
 impl OpenaiAgent {
     pub fn new(key: String, model: String, seed: &Seed, tools: &[Tool]) -> Self {
         let messages = vec![
-            json!({ "role": "system", "content": seed.system }),
-            json!({ "role": "user", "content": seed.selected }),
-            json!({ "role": "user", "content": seed.transform }),
+            Message::System {
+                role: Role::System,
+                content: seed.system.to_string(),
+            },
+            Message::User {
+                role: Role::User,
+                content: seed.selected.to_string(),
+            },
+            Message::User {
+                role: Role::User,
+                content: seed.transform.to_string(),
+            },
         ];
         let tools = tools
             .iter()
-            .map(|t| {
-                json!({
-                    "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.input_schema,
-                    }
-                })
+            .map(|t| ToolDef {
+                kind: FunctionType::Function,
+                function: FunctionDef {
+                    name: t.name.to_string(),
+                    description: t.description.to_string(),
+                    parameters: serde_json::to_value(&t.input_schema)
+                        .expect("tool schema serializes"),
+                },
             })
             .collect();
         OpenaiAgent {
@@ -50,13 +129,13 @@ impl OpenaiAgent {
         }
     }
 
-    fn request(&self) -> Value {
-        json!({
-            "model": self.model,
-            "messages": self.messages,
-            "tools": self.tools,
-            "tool_choice": "auto",
-        })
+    fn request(&self) -> Request<'_> {
+        Request {
+            model: &self.model,
+            messages: &self.messages,
+            tools: &self.tools,
+            tool_choice: "auto",
+        }
     }
 }
 
@@ -70,11 +149,11 @@ impl Model for OpenaiAgent {
             } else {
                 r.content
             };
-            self.messages.push(json!({
-                "role": "tool",
-                "tool_call_id": r.id,
-                "content": content,
-            }));
+            self.messages.push(Message::Tool {
+                role: Role::Tool,
+                tool_call_id: r.id,
+                content,
+            });
         }
 
         let body = post(&self.client, &self.key, &self.request())?;
@@ -82,8 +161,9 @@ impl Model for OpenaiAgent {
         if message.is_null() {
             anyhow::bail!("OpenAI response missing a message: {body}");
         }
-        self.messages.push(message.clone());
-        Ok(calls_from_message(&message))
+        let calls = calls_from_message(&message);
+        self.messages.push(Message::Assistant(message));
+        Ok(calls)
     }
 }
 
@@ -101,7 +181,7 @@ fn calls_from_message(message: &Value) -> Vec<RawCall> {
                 .get("arguments")
                 .and_then(Value::as_str)
                 .and_then(|s| serde_json::from_str(s).ok())
-                .unwrap_or_else(|| json!({}));
+                .unwrap_or_else(|| serde_json::json!({}));
             Some(RawCall {
                 id: c.get("id")?.as_str()?.to_string(),
                 name: function.get("name")?.as_str()?.to_string(),
@@ -111,7 +191,7 @@ fn calls_from_message(message: &Value) -> Vec<RawCall> {
         .collect()
 }
 
-fn post(client: &reqwest::blocking::Client, key: &str, req: &Value) -> anyhow::Result<Value> {
+fn post(client: &reqwest::blocking::Client, key: &str, req: &Request) -> anyhow::Result<Value> {
     let response = client
         .post(API_URL)
         .bearer_auth(key)
@@ -132,6 +212,13 @@ fn post(client: &reqwest::blocking::Client, key: &str, req: &Value) -> anyhow::R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    /// The wire JSON refac actually sends — the unit tests assert against this,
+    /// so they prove the typed structs serialize to the same bytes as before.
+    fn request_json(agent: &OpenaiAgent) -> Value {
+        serde_json::to_value(agent.request()).unwrap()
+    }
 
     #[test]
     fn agent_request_uses_function_tools() {
@@ -142,10 +229,12 @@ mod tests {
             transform: "transform",
         };
         let agent = OpenaiAgent::new("k".into(), "gpt-5.5".into(), &seed, &tools);
-        let req = agent.request();
+        let req = request_json(&agent);
 
         assert_eq!(req["tool_choice"], "auto");
+        assert_eq!(req["messages"][0]["role"], "system");
         assert_eq!(req["messages"][0]["content"], "SYS");
+        assert_eq!(req["messages"][1]["role"], "user");
         assert_eq!(req["messages"][1]["content"], "selected");
         assert_eq!(req["messages"][2]["content"], "transform");
         assert_eq!(req["tools"][0]["type"], "function");
@@ -156,6 +245,54 @@ mod tests {
             .map(|t| t["function"]["name"].as_str().unwrap())
             .collect();
         assert_eq!(names, ["edit", "view", "reset", "finish"]);
+    }
+
+    #[test]
+    fn tool_result_turn_serializes_to_wire_shape() {
+        let tools = crate::agent::tools();
+        let seed = Seed {
+            system: "SYS",
+            selected: "selected",
+            transform: "transform",
+        };
+        let mut agent = OpenaiAgent::new("k".into(), "m".into(), &seed, &tools);
+        agent.messages.push(Message::Tool {
+            role: Role::Tool,
+            tool_call_id: "c1".into(),
+            content: "ok".into(),
+        });
+        let req = request_json(&agent);
+        let msg = &req["messages"][3];
+        assert_eq!(msg["role"], "tool");
+        assert_eq!(msg["tool_call_id"], "c1");
+        assert_eq!(msg["content"], "ok");
+    }
+
+    #[test]
+    fn echoed_assistant_turn_is_verbatim() {
+        let tools = crate::agent::tools();
+        let seed = Seed {
+            system: "SYS",
+            selected: "selected",
+            transform: "transform",
+        };
+        let mut agent = OpenaiAgent::new("k".into(), "m".into(), &seed, &tools);
+        // The whole assistant message (role included) round-trips unchanged —
+        // refac flattens it back in verbatim.
+        let raw = json!({
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+                { "id": "c1", "type": "function",
+                  "function": { "name": "edit", "arguments": "{}" } }
+            ]
+        });
+        agent.messages.push(Message::Assistant(raw.clone()));
+        assert_eq!(request_json(&agent)["messages"][3], raw);
+        // The echoed object already carries `role`; the enum must not add a
+        // second one (untagged, not tag = "role").
+        let wire = serde_json::to_string(&agent.request()).unwrap();
+        assert_eq!(wire.matches("\"role\":\"assistant\"").count(), 1);
     }
 
     #[test]

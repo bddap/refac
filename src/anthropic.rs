@@ -1,6 +1,7 @@
 //! Anthropic (Claude) Messages API edit-mode agent.
 
 use anyhow::Context;
+use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::agent::{Model, RawCall, Seed, Tool, ToolResult};
@@ -20,18 +21,88 @@ fn field_or_placeholder(field: &str) -> &str {
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
+/// A `system` prompt block. The API only takes text blocks here.
+#[derive(Serialize)]
+struct SystemBlock {
+    #[serde(rename = "type")]
+    kind: TextType,
+    text: String,
+}
+
+/// Serializes to the literal `"text"` so a `SystemBlock`/`ContentBlock::Text`
+/// can't carry any other `type`.
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum TextType {
+    Text,
+}
+
+/// One block in a message's `content` array. Tagged by `type` as the Messages
+/// API expects: `text`, `tool_use`, `tool_result`.
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ContentBlock {
+    Text {
+        text: String,
+    },
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        is_error: bool,
+    },
+}
+
+/// One conversation turn. The role tags the JSON (`"role": "user"` /
+/// `"assistant"`), so a role can't be paired with the wrong content.
+#[derive(Serialize)]
+#[serde(tag = "role", rename_all = "snake_case")]
+enum Message {
+    User {
+        content: Vec<ContentBlock>,
+    },
+    /// The assistant turn is echoed back verbatim as the API returned it. It
+    /// stays raw `Value` for byte-fidelity: re-serializing parsed blocks would
+    /// reorder fields and drop ones refac doesn't model (e.g. `thinking`
+    /// signatures), which the next request's `tool_use`/`tool_result` handshake
+    /// depends on.
+    Assistant {
+        content: Value,
+    },
+}
+
+/// A tool definition as the Messages API takes it.
+#[derive(Serialize)]
+struct ToolDef {
+    name: String,
+    description: String,
+    input_schema: Value,
+}
+
 /// An edit-mode session against the Messages API. Implements [`Model`]: each
 /// `turn` first threads the previous turn's results back as a `tool_result` user
 /// turn, posts the running conversation plus the tool definitions, and returns
-/// the model's tool calls. The assistant's content is echoed back verbatim (as
-/// JSON), which is what the API requires for a `tool_use`/`tool_result` exchange.
+/// the model's tool calls. The assistant's content is echoed back verbatim,
+/// which is what the API requires for a `tool_use`/`tool_result` exchange.
 pub struct AnthropicAgent {
     key: String,
     model: String,
     client: reqwest::blocking::Client,
-    system: Vec<Value>,
-    messages: Vec<Value>,
-    tools: Vec<Value>,
+    system: Vec<SystemBlock>,
+    messages: Vec<Message>,
+    tools: Vec<ToolDef>,
+}
+
+/// The request body POSTed to the Messages API. Borrows the agent's running
+/// state so building it never clones the conversation.
+#[derive(Serialize)]
+struct Request<'a> {
+    model: &'a str,
+    max_tokens: u32,
+    messages: &'a [Message],
+    tools: &'a [ToolDef],
+    tool_choice: Value,
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    system: &'a [SystemBlock],
 }
 
 impl AnthropicAgent {
@@ -39,22 +110,27 @@ impl AnthropicAgent {
     /// prompt goes in the top-level `system`; the user turn carries the selected
     /// text and the instruction as two text blocks.
     pub fn new(key: String, model: String, seed: &Seed, tools: &[Tool]) -> Self {
-        let system = vec![json!({ "type": "text", "text": seed.system })];
-        let messages = vec![json!({
-            "role": "user",
-            "content": [
-                { "type": "text", "text": field_or_placeholder(seed.selected) },
-                { "type": "text", "text": field_or_placeholder(seed.transform) },
+        let system = vec![SystemBlock {
+            kind: TextType::Text,
+            text: seed.system.to_string(),
+        }];
+        let messages = vec![Message::User {
+            content: vec![
+                ContentBlock::Text {
+                    text: field_or_placeholder(seed.selected).to_string(),
+                },
+                ContentBlock::Text {
+                    text: field_or_placeholder(seed.transform).to_string(),
+                },
             ],
-        })];
+        }];
         let tools = tools
             .iter()
-            .map(|t| {
-                json!({
-                    "name": t.name,
-                    "description": t.description,
-                    "input_schema": t.input_schema,
-                })
+            .map(|t| ToolDef {
+                name: t.name.to_string(),
+                description: t.description.to_string(),
+                input_schema: serde_json::to_value(&t.input_schema)
+                    .expect("tool schema serializes"),
             })
             .collect();
         AnthropicAgent {
@@ -67,18 +143,15 @@ impl AnthropicAgent {
         }
     }
 
-    fn request(&self) -> Value {
-        let mut req = json!({
-            "model": self.model,
-            "max_tokens": MAX_TOKENS,
-            "messages": self.messages,
-            "tools": self.tools,
-            "tool_choice": { "type": "auto" },
-        });
-        if !self.system.is_empty() {
-            req["system"] = json!(self.system);
+    fn request(&self) -> Request<'_> {
+        Request {
+            model: &self.model,
+            max_tokens: MAX_TOKENS,
+            messages: &self.messages,
+            tools: &self.tools,
+            tool_choice: json!({ "type": "auto" }),
+            system: &self.system,
         }
-        req
     }
 }
 
@@ -86,19 +159,15 @@ impl Model for AnthropicAgent {
     fn turn(&mut self, results: Vec<ToolResult>) -> anyhow::Result<Vec<RawCall>> {
         // Answer the previous turn's tool calls before asking for the next one.
         if !results.is_empty() {
-            let blocks: Vec<Value> = results
+            let content = results
                 .into_iter()
-                .map(|r| {
-                    json!({
-                        "type": "tool_result",
-                        "tool_use_id": r.id,
-                        "content": r.content,
-                        "is_error": r.is_error,
-                    })
+                .map(|r| ContentBlock::ToolResult {
+                    tool_use_id: r.id,
+                    content: r.content,
+                    is_error: r.is_error,
                 })
                 .collect();
-            self.messages
-                .push(json!({ "role": "user", "content": blocks }));
+            self.messages.push(Message::User { content });
         }
 
         let body = post(&self.client, &self.key, &self.request())?;
@@ -106,11 +175,11 @@ impl Model for AnthropicAgent {
             .get("content")
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("Anthropic response missing content: {body}"))?;
+        let calls = calls_from_content(&content);
         // Echo the assistant turn back so the next request carries the tool_use
         // blocks the tool_results will refer to.
-        self.messages
-            .push(json!({ "role": "assistant", "content": content }));
-        Ok(calls_from_content(&self.messages.last().unwrap()["content"]))
+        self.messages.push(Message::Assistant { content });
+        Ok(calls)
     }
 }
 
@@ -133,8 +202,11 @@ fn calls_from_content(content: &Value) -> Vec<RawCall> {
 
 /// POST a request body to the Messages API, returning the parsed JSON or an
 /// error carrying the status and body.
-fn post(client: &reqwest::blocking::Client, key: &str, req: &Value) -> anyhow::Result<Value> {
-    tracing::debug!("anthropic request: {}", req);
+fn post(client: &reqwest::blocking::Client, key: &str, req: &Request) -> anyhow::Result<Value> {
+    tracing::debug!(
+        "anthropic request: {}",
+        serde_json::to_value(req).unwrap_or_default()
+    );
     let response = client
         .post(API_URL)
         .header("x-api-key", key)
@@ -158,6 +230,12 @@ fn post(client: &reqwest::blocking::Client, key: &str, req: &Value) -> anyhow::R
 mod tests {
     use super::*;
 
+    /// The wire JSON refac actually sends — the unit tests assert against this,
+    /// so they prove the typed structs serialize to the same bytes as before.
+    fn request_json(agent: &AnthropicAgent) -> Value {
+        serde_json::to_value(agent.request()).unwrap()
+    }
+
     #[test]
     fn agent_request_carries_tools_and_seed() {
         let tools = crate::agent::tools();
@@ -167,10 +245,12 @@ mod tests {
             transform: "transform",
         };
         let agent = AnthropicAgent::new("k".into(), "claude-opus-4-8".into(), &seed, &tools);
-        let req = agent.request();
+        let req = request_json(&agent);
 
+        assert_eq!(req["system"][0]["type"], "text");
         assert_eq!(req["system"][0]["text"], "SYS");
         assert_eq!(req["messages"][0]["role"], "user");
+        assert_eq!(req["messages"][0]["content"][0]["type"], "text");
         assert_eq!(req["messages"][0]["content"][0]["text"], "selected");
         assert_eq!(req["messages"][0]["content"][1]["text"], "transform");
         assert_eq!(req["tool_choice"]["type"], "auto");
@@ -181,6 +261,54 @@ mod tests {
             .map(|t| t["name"].as_str().unwrap())
             .collect();
         assert_eq!(names, ["edit", "view", "reset", "finish"]);
+    }
+
+    #[test]
+    fn tool_result_turn_serializes_to_wire_shape() {
+        let tools = crate::agent::tools();
+        let seed = Seed {
+            system: "SYS",
+            selected: "selected",
+            transform: "transform",
+        };
+        let mut agent = AnthropicAgent::new("k".into(), "m".into(), &seed, &tools);
+        agent.messages.push(Message::User {
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "tu_1".into(),
+                content: "ok".into(),
+                is_error: false,
+            }],
+        });
+        let req = request_json(&agent);
+        let block = &req["messages"][1]["content"][0];
+        assert_eq!(req["messages"][1]["role"], "user");
+        assert_eq!(block["type"], "tool_result");
+        assert_eq!(block["tool_use_id"], "tu_1");
+        assert_eq!(block["content"], "ok");
+        assert_eq!(block["is_error"], false);
+    }
+
+    #[test]
+    fn echoed_assistant_turn_is_verbatim() {
+        let tools = crate::agent::tools();
+        let seed = Seed {
+            system: "SYS",
+            selected: "selected",
+            transform: "transform",
+        };
+        let mut agent = AnthropicAgent::new("k".into(), "m".into(), &seed, &tools);
+        // An assistant turn carrying a block type refac doesn't model must
+        // round-trip unchanged.
+        let raw = json!([
+            { "type": "thinking", "thinking": "hmm", "signature": "sig" },
+            { "type": "tool_use", "id": "tu_1", "name": "edit", "input": { "old": "a", "new": "b" } }
+        ]);
+        agent.messages.push(Message::Assistant {
+            content: raw.clone(),
+        });
+        let req = request_json(&agent);
+        assert_eq!(req["messages"][1]["role"], "assistant");
+        assert_eq!(req["messages"][1]["content"], raw);
     }
 
     #[test]
