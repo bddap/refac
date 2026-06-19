@@ -37,16 +37,16 @@ enum ContentBlock {
     },
 }
 
-/// The `role` tag keeps a role from pairing with the wrong content shape.
 #[derive(Serialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
 enum Message {
     User {
         content: Vec<ContentBlock>,
     },
-    /// Echoed back as raw `Value`: re-serializing parsed blocks would reorder
-    /// fields and drop ones refac doesn't model (e.g. `thinking` signatures) that
-    /// the next `tool_use`/`tool_result` handshake depends on.
+    /// Raw `Value`, not typed blocks: the assistant turn is echoed back verbatim
+    /// for the `tool_use`/`tool_result` handshake, and re-serializing parsed
+    /// blocks would reorder fields and drop ones refac doesn't model (e.g.
+    /// `thinking` signatures) that the next turn depends on.
     Assistant {
         content: Value,
     },
@@ -97,9 +97,8 @@ impl AnthropicAgent {
             kind: TextType::Text,
             text: seed.system.to_string(),
         }];
-        // Open with the user's instruction, then a pre-seeded `view` call whose
-        // result is `selected` — so `selected` reaches the model once, as a tool
-        // result, exactly as a real `view` later would (never as a user message).
+        // User instruction, then the synthetic `view` call (see `SEED_TOOL`) whose
+        // result carries `selected`.
         let messages = vec![
             Message::User {
                 content: vec![ContentBlock::Text {
@@ -156,7 +155,6 @@ impl AnthropicAgent {
 
 impl Model for AnthropicAgent {
     fn turn(&mut self, results: Vec<ToolResult>) -> anyhow::Result<Vec<RawCall>> {
-        // Answer the previous turn's tool calls before asking for the next one.
         if !results.is_empty() {
             let content = results
                 .into_iter()
@@ -181,8 +179,6 @@ impl Model for AnthropicAgent {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("Anthropic response missing content: {body}"))?;
         let calls = calls_from_content(&content);
-        // The echoed assistant turn carries the tool_use blocks the next turn's
-        // tool_results refer to.
         self.messages.push(Message::Assistant { content });
         Ok(calls)
     }

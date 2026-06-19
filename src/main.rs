@@ -104,10 +104,9 @@ fn refactor(
     let provider = config.provider(sc);
     let model = config.model(provider);
 
-    // The buffer the model edits and the `selected` it's shown must be the same
-    // string, including the empty-input placeholder: that's what lets the model
-    // turn an empty selection into generated text — it `edit`s the placeholder
-    // away. (Anthropic also 400s on an empty text block.)
+    // The edit buffer and the shown `selected` must be the same string, including
+    // the empty-input placeholder — that's what lets the model generate from an
+    // empty selection: it `edit`s the placeholder away.
     let seed_selected = agent::placeholder_if_empty(&selected).to_owned();
     let seed = agent::Seed {
         system: prompt::SYSTEM_PROMPT,

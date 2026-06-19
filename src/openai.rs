@@ -8,9 +8,6 @@ use crate::agent::{Model, RawCall, Seed, Tool, ToolResult, SEED_CALL_ID, SEED_TO
 
 const API_URL: &str = "https://api.openai.com/v1/chat/completions";
 
-/// One chat-completions message. The `role` tag keeps a role from pairing with
-/// the wrong content shape; each variant fixes its own role, so a message can't
-/// be built with the wrong one.
 #[derive(Serialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
 enum Message {
@@ -24,19 +21,14 @@ enum Message {
         tool_call_id: String,
         content: String,
     },
-    /// The assistant turn we echo back so the next turn's `tool` messages line up
-    /// with the `tool_calls` they answer. A `tag = "role"` newtype variant
-    /// flattens the inner struct, so the wire shape is exactly [`AssistantTurn`]'s
-    /// fields plus `role` — and the received turn flows straight back out with no
-    /// field-by-field copy to drift out of sync.
+    /// A newtype variant (not fields) so the received [`AssistantTurn`] flows
+    /// straight back out for the echo with no field-by-field copy to drift.
     Assistant(AssistantTurn),
 }
 
-/// One requested tool call. `arguments` is the model's call payload as a JSON
-/// *string* on the wire; kept verbatim as a `String` so the bytes we echo back
-/// match the bytes we received (reparsing would reorder keys and renormalize
-/// numbers/whitespace). [`RawCall`] parsing happens separately in
-/// [`raw_calls`].
+/// `arguments` stays a verbatim `String`, not a parsed `Value`: it's a JSON
+/// string on the wire, and reparsing would reorder keys and renormalize
+/// numbers/whitespace, so the echo would no longer match the received bytes.
 #[derive(Serialize, Deserialize)]
 struct ToolCall {
     id: String,
@@ -51,19 +43,11 @@ struct FunctionCall {
     arguments: String,
 }
 
-/// The assistant turn, both as it arrives in a response and as we echo it back.
-/// chat-completions (unlike Anthropic's Messages API, which can return opaque
-/// `thinking` blocks that must round-trip verbatim) carries no echo-required
-/// fields beyond these, so the turn can be fully typed rather than held as a raw
-/// `Value`. `content` serializes even when `null` (a tool-call turn carries no
-/// text) so the echo matches what the API sent; `tool_calls` is absent on a
-/// plain text turn. Modeled fields not in the `tool_calls`/`tool_call_id`
-/// handshake (e.g. `refusal`) are dropped on echo — harmless, the API ignores
-/// them on input.
-///
-/// Must stay a struct (or otherwise serialize to a JSON object): the
-/// `Message`'s `tag = "role"` injects `role` into this value's map, which only
-/// works for a map-shaped inner.
+/// Fully typed rather than a raw `Value`: unlike Anthropic (whose opaque
+/// `thinking` blocks must round-trip verbatim), chat-completions has no
+/// echo-required fields beyond these, so unmodeled ones (e.g. `refusal`) can
+/// drop on echo. Must serialize to a JSON object — `Message`'s `tag = "role"`
+/// injects `role` into this value's map, which needs a map-shaped inner.
 #[derive(Serialize, Deserialize)]
 struct AssistantTurn {
     content: Option<String>,
@@ -71,7 +55,6 @@ struct AssistantTurn {
     tool_calls: Option<Vec<ToolCall>>,
 }
 
-/// chat-completions wraps each tool in a `{"type":"function", ...}` envelope.
 #[derive(Serialize)]
 struct ToolDef {
     #[serde(rename = "type")]
@@ -110,9 +93,8 @@ struct Request<'a> {
 
 impl OpenaiAgent {
     pub fn new(key: String, model: String, seed: &Seed, tools: &[Tool]) -> Self {
-        // Open with the user's instruction, then a pre-seeded `view` call whose
-        // result is `selected` — so `selected` reaches the model once, as a tool
-        // result, exactly as a real `view` later would (never as a user message).
+        // User instruction, then the synthetic `view` call (see `SEED_TOOL`) whose
+        // result carries `selected`.
         let messages = vec![
             Message::System {
                 content: seed.system.to_string(),
@@ -168,8 +150,8 @@ impl OpenaiAgent {
 
 impl Model for OpenaiAgent {
     fn turn(&mut self, results: Vec<ToolResult>) -> anyhow::Result<Vec<RawCall>> {
-        // Answer the previous turn's tool calls first. chat-completions has no
-        // error flag on a tool message, so mark failures in the content.
+        // chat-completions has no error flag on a tool message, so mark a failed
+        // result in the content itself.
         for r in results {
             let content = match r.result {
                 Ok(c) => c,
@@ -189,8 +171,6 @@ impl Model for OpenaiAgent {
         let turn: AssistantTurn = serde_json::from_value(message)
             .map_err(|e| anyhow::anyhow!("OpenAI assistant message did not parse: {e}"))?;
         let calls = raw_calls(turn.tool_calls.as_deref().unwrap_or(&[]));
-        // Echo the turn back verbatim: it carries the `tool_calls` the next
-        // turn's `tool` messages answer.
         self.messages.push(Message::Assistant(turn));
         Ok(calls)
     }

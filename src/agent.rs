@@ -21,26 +21,21 @@ pub struct Seed<'a> {
     pub transform: &'a str,
 }
 
-/// The tool name and call id of the pre-seeded function call that hands the model
-/// `selected`. The conversation opens as if the model itself had already called
-/// `view`: refac's reply to that call is `selected`. This is the *only* place
-/// `selected` enters the conversation — never as a user message — so the model
-/// reads it the same way it reads every later `view`, and it appears exactly once.
+/// The conversation opens with a synthetic `view` call whose result is
+/// `selected` — the only place `selected` enters, so the model reads it exactly
+/// as it reads every later `view`, never as a user message.
 pub const SEED_TOOL: &str = "view";
 pub const SEED_CALL_ID: &str = "seed_view";
 
 impl Seed<'_> {
-    /// The pre-seeded `view` call's arguments, mirroring the empty-args shape a
-    /// real `view` call sends, so the seeded turn is indistinguishable from one
-    /// the model made itself.
     pub fn seed_call_args() -> Value {
         serde_json::json!({})
     }
 }
 
-/// Both providers reject (or, for OpenAI, would silently send) an empty user
-/// field; render it as a visible placeholder. Shared so the two wire formats
-/// can't disagree about what an empty selection looks like.
+/// Both providers reject an empty user field (Anthropic 400s); render it as a
+/// visible placeholder. Shared so the two wire formats agree on what empty looks
+/// like.
 pub fn placeholder_if_empty(field: &str) -> &str {
     if field.is_empty() {
         "(empty)"
@@ -170,18 +165,15 @@ pub struct RawCall {
     pub args: Value,
 }
 
-/// One field, not a `(String, bool)`, so "is this an error" can't disagree with
-/// the content — each provider renders the two arms its own way (Anthropic's
-/// `is_error` flag, OpenAI's `ERROR:` prefix).
 pub struct ToolResult {
     pub id: String,
     pub result: Reply,
 }
 
-/// One assistant turn. Folding "answer the previous calls" and "take the next
-/// turn" into one step makes it impossible to advance without a result for every
-/// outstanding call, which both wire protocols require. `results` is empty on the
-/// first turn; an empty return means the model stopped without a call (done).
+/// Answering the previous calls and taking the next turn are one method so the
+/// loop can't advance without a result for every outstanding call, which both
+/// wire protocols require. Empty `results` on the first turn; an empty return
+/// means the model stopped without a call (done).
 pub trait Model {
     fn turn(&mut self, results: Vec<ToolResult>) -> Result<Vec<RawCall>>;
 }
