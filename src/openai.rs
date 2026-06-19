@@ -1,55 +1,74 @@
 //! OpenAI chat-completions API edit-mode agent.
 
 use schemars::Schema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::agent::{Model, RawCall, Seed, Tool, ToolResult};
 
 const API_URL: &str = "https://api.openai.com/v1/chat/completions";
 
-/// One chat-completions message. `untagged` because the assistant variant is a
-/// whole verbatim message object that already carries its own `"role"` — a
-/// `tag = "role"` discriminant would emit `role` twice. The constructed
-/// variants spell their role out instead.
+/// One chat-completions message. The `role` tag keeps a role from pairing with
+/// the wrong content shape; each variant fixes its own role, so a message can't
+/// be built with the wrong one.
 #[derive(Serialize)]
-#[serde(untagged)]
+#[serde(tag = "role", rename_all = "snake_case")]
 enum Message {
     System {
-        role: SystemRole,
         content: String,
     },
     User {
-        role: UserRole,
         content: String,
     },
     Tool {
-        role: ToolRole,
         tool_call_id: String,
         content: String,
     },
-    /// Echoed back as raw `Value` (its `"role"` included): re-serializing parsed
-    /// fields would reorder them and drop ones refac doesn't model that the next
-    /// `tool_calls`/`tool_call_id` handshake depends on.
-    Assistant(Value),
+    /// The assistant turn we echo back so the next turn's `tool` messages line up
+    /// with the `tool_calls` they answer. A `tag = "role"` newtype variant
+    /// flattens the inner struct, so the wire shape is exactly [`AssistantTurn`]'s
+    /// fields plus `role` — and the received turn flows straight back out with no
+    /// field-by-field copy to drift out of sync.
+    Assistant(AssistantTurn),
 }
 
-// Per-variant singleton roles, so a message's `role` is fixed by its type and
-// can't be constructed wrong (untagged Serialize emits the field as-is).
-#[derive(Serialize)]
-#[serde(rename_all = "snake_case")]
-enum SystemRole {
-    System,
+/// One requested tool call. `arguments` is the model's call payload as a JSON
+/// *string* on the wire; kept verbatim as a `String` so the bytes we echo back
+/// match the bytes we received (reparsing would reorder keys and renormalize
+/// numbers/whitespace). [`RawCall`] parsing happens separately in
+/// [`raw_calls`].
+#[derive(Serialize, Deserialize)]
+struct ToolCall {
+    id: String,
+    #[serde(rename = "type")]
+    kind: FunctionType,
+    function: FunctionCall,
 }
-#[derive(Serialize)]
-#[serde(rename_all = "snake_case")]
-enum UserRole {
-    User,
+
+#[derive(Serialize, Deserialize)]
+struct FunctionCall {
+    name: String,
+    arguments: String,
 }
-#[derive(Serialize)]
-#[serde(rename_all = "snake_case")]
-enum ToolRole {
-    Tool,
+
+/// The assistant turn, both as it arrives in a response and as we echo it back.
+/// chat-completions (unlike Anthropic's Messages API, which can return opaque
+/// `thinking` blocks that must round-trip verbatim) carries no echo-required
+/// fields beyond these, so the turn can be fully typed rather than held as a raw
+/// `Value`. `content` serializes even when `null` (a tool-call turn carries no
+/// text) so the echo matches what the API sent; `tool_calls` is absent on a
+/// plain text turn. Modeled fields not in the `tool_calls`/`tool_call_id`
+/// handshake (e.g. `refusal`) are dropped on echo — harmless, the API ignores
+/// them on input.
+///
+/// Must stay a struct (or otherwise serialize to a JSON object): the
+/// `Message`'s `tag = "role"` injects `role` into this value's map, which only
+/// works for a map-shaped inner.
+#[derive(Serialize, Deserialize)]
+struct AssistantTurn {
+    content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<ToolCall>>,
 }
 
 /// chat-completions wraps each tool in a `{"type":"function", ...}` envelope.
@@ -60,7 +79,7 @@ struct ToolDef {
     function: FunctionDef,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum FunctionType {
     Function,
@@ -93,15 +112,12 @@ impl OpenaiAgent {
     pub fn new(key: String, model: String, seed: &Seed, tools: &[Tool]) -> Self {
         let messages = vec![
             Message::System {
-                role: SystemRole::System,
                 content: seed.system.to_string(),
             },
             Message::User {
-                role: UserRole::User,
                 content: seed.selected.to_string(),
             },
             Message::User {
-                role: UserRole::User,
                 content: seed.transform.to_string(),
             },
         ];
@@ -145,7 +161,6 @@ impl Model for OpenaiAgent {
                 Err(c) => format!("ERROR: {c}"),
             };
             self.messages.push(Message::Tool {
-                role: ToolRole::Tool,
                 tool_call_id: r.id,
                 content,
             });
@@ -156,31 +171,27 @@ impl Model for OpenaiAgent {
         if message.is_null() {
             anyhow::bail!("OpenAI response missing a message: {body}");
         }
-        let calls = calls_from_message(&message);
-        self.messages.push(Message::Assistant(message));
+        let turn: AssistantTurn = serde_json::from_value(message)
+            .map_err(|e| anyhow::anyhow!("OpenAI assistant message did not parse: {e}"))?;
+        let calls = raw_calls(turn.tool_calls.as_deref().unwrap_or(&[]));
+        // Echo the turn back verbatim: it carries the `tool_calls` the next
+        // turn's `tool` messages answer.
+        self.messages.push(Message::Assistant(turn));
         Ok(calls)
     }
 }
 
-/// chat-completions delivers each call's `arguments` as a JSON *string*, so parse it.
-fn calls_from_message(message: &Value) -> Vec<RawCall> {
-    message
-        .get("tool_calls")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|c| {
-            let function = c.get("function")?;
-            let args = function
-                .get("arguments")
-                .and_then(Value::as_str)
-                .and_then(|s| serde_json::from_str(s).ok())
-                .unwrap_or_else(|| serde_json::json!({}));
-            Some(RawCall {
-                id: c.get("id")?.as_str()?.to_string(),
-                name: function.get("name")?.as_str()?.to_string(),
-                args,
-            })
+/// chat-completions delivers each call's `arguments` as a JSON string; parse it
+/// into the [`RawCall::args`] object refac dispatches on. A call whose arguments
+/// aren't valid JSON falls back to an empty object rather than dropping the call.
+fn raw_calls(tool_calls: &[ToolCall]) -> Vec<RawCall> {
+    tool_calls
+        .iter()
+        .map(|c| RawCall {
+            id: c.id.clone(),
+            name: c.function.name.clone(),
+            args: serde_json::from_str(&c.function.arguments)
+                .unwrap_or_else(|_| serde_json::json!({})),
         })
         .collect()
 }
@@ -237,7 +248,6 @@ mod tests {
         };
         let mut agent = OpenaiAgent::new("k".into(), "m".into(), &seed, &tools);
         agent.messages.push(Message::Tool {
-            role: ToolRole::Tool,
             tool_call_id: "c1".into(),
             content: "ok".into(),
         });
@@ -249,7 +259,7 @@ mod tests {
     }
 
     #[test]
-    fn echoed_assistant_turn_is_verbatim() {
+    fn assistant_turn_serializes_to_wire_shape() {
         let tools = crate::agent::tools();
         let seed = Seed {
             system: "SYS",
@@ -257,27 +267,61 @@ mod tests {
             transform: "transform",
         };
         let mut agent = OpenaiAgent::new("k".into(), "m".into(), &seed, &tools);
-        // The whole assistant message (role included) round-trips unchanged —
-        // refac flattens it back in verbatim.
+        // A tool-calling assistant turn round-trips to the canonical wire shape:
+        // `role` once, a `null` content, and the typed `tool_calls` with their
+        // `arguments` JSON string untouched.
         let raw = json!({
             "role": "assistant",
             "content": null,
             "tool_calls": [
                 { "id": "c1", "type": "function",
-                  "function": { "name": "edit", "arguments": "{}" } }
+                  "function": { "name": "edit", "arguments": "{\"old\":\"a\",\"new\":\"b\"}" } }
             ]
         });
-        agent.messages.push(Message::Assistant(raw.clone()));
+        let turn: AssistantTurn = serde_json::from_value(raw.clone()).unwrap();
+        agent.messages.push(Message::Assistant(turn));
         assert_eq!(request_json(&agent)["messages"][3], raw);
-        // The echoed object already carries `role`; the enum must not add a
-        // second one (untagged, not tag = "role").
+        // The role-tagged enum must emit `role` exactly once (the bug a second,
+        // body-carried `role` would reintroduce).
         let wire = serde_json::to_string(&agent.request()).unwrap();
         assert_eq!(wire.matches("\"role\":\"assistant\"").count(), 1);
     }
 
     #[test]
+    fn assistant_arguments_string_is_byte_identical() {
+        // `arguments` stays a verbatim `String`: a payload serde_json would
+        // reorder (`b` before `a`) and renormalize (spaces, number form) on a
+        // reparse must echo back byte-for-byte.
+        let args = "{\"b\": 1, \"a\": 1.0, \"n\": 1e3}";
+        let raw = json!({
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+                { "id": "c1", "type": "function",
+                  "function": { "name": "edit", "arguments": args } }
+            ]
+        });
+        let turn: AssistantTurn = serde_json::from_value(raw).unwrap();
+        let msg = Message::Assistant(turn);
+        assert_eq!(
+            serde_json::to_value(&msg).unwrap()["tool_calls"][0]["function"]["arguments"],
+            json!(args)
+        );
+    }
+
+    #[test]
+    fn text_only_assistant_turn_omits_tool_calls() {
+        let raw = json!({ "role": "assistant", "content": "done" });
+        let turn: AssistantTurn = serde_json::from_value(raw).unwrap();
+        let msg = Message::Assistant(turn);
+        let wire = serde_json::to_value(&msg).unwrap();
+        assert_eq!(wire["content"], "done");
+        assert!(wire.get("tool_calls").is_none());
+    }
+
+    #[test]
     fn parses_tool_calls_with_string_arguments() {
-        let message = json!({
+        let raw = json!({
             "role": "assistant",
             "tool_calls": [
                 { "id": "c1", "type": "function",
@@ -286,7 +330,8 @@ mod tests {
                   "function": { "name": "finish", "arguments": "{}" } }
             ]
         });
-        let calls = calls_from_message(&message);
+        let turn: AssistantTurn = serde_json::from_value(raw).unwrap();
+        let calls = raw_calls(turn.tool_calls.as_deref().unwrap_or(&[]));
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].id, "c1");
         assert_eq!(calls[0].name, "edit");
@@ -296,7 +341,8 @@ mod tests {
 
     #[test]
     fn no_tool_calls_is_no_calls() {
-        let message = json!({ "role": "assistant", "content": "done" });
-        assert!(calls_from_message(&message).is_empty());
+        let raw = json!({ "role": "assistant", "content": "done" });
+        let turn: AssistantTurn = serde_json::from_value(raw).unwrap();
+        assert!(raw_calls(turn.tool_calls.as_deref().unwrap_or(&[])).is_empty());
     }
 }
