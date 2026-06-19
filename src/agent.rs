@@ -21,6 +21,23 @@ pub struct Seed<'a> {
     pub transform: &'a str,
 }
 
+/// The tool name and call id of the pre-seeded function call that hands the model
+/// `selected`. The conversation opens as if the model itself had already called
+/// `view`: refac's reply to that call is `selected`. This is the *only* place
+/// `selected` enters the conversation — never as a user message — so the model
+/// reads it the same way it reads every later `view`, and it appears exactly once.
+pub const SEED_TOOL: &str = "view";
+pub const SEED_CALL_ID: &str = "seed_view";
+
+impl Seed<'_> {
+    /// The pre-seeded `view` call's arguments, mirroring the empty-args shape a
+    /// real `view` call sends, so the seeded turn is indistinguishable from one
+    /// the model made itself.
+    pub fn seed_call_args() -> Value {
+        serde_json::json!({})
+    }
+}
+
 /// Both providers reject (or, for OpenAI, would silently send) an empty user
 /// field; render it as a visible placeholder. Shared so the two wire formats
 /// can't disagree about what an empty selection looks like.

@@ -4,7 +4,7 @@ use schemars::Schema;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use crate::agent::{Model, RawCall, Seed, Tool, ToolResult};
+use crate::agent::{Model, RawCall, Seed, Tool, ToolResult, SEED_CALL_ID, SEED_TOOL};
 
 const MAX_TOKENS: u32 = 80000;
 
@@ -97,16 +97,31 @@ impl AnthropicAgent {
             kind: TextType::Text,
             text: seed.system.to_string(),
         }];
-        let messages = vec![Message::User {
-            content: vec![
-                ContentBlock::Text {
-                    text: seed.selected.to_string(),
-                },
-                ContentBlock::Text {
+        // Open with the user's instruction, then a pre-seeded `view` call whose
+        // result is `selected` — so `selected` reaches the model once, as a tool
+        // result, exactly as a real `view` later would (never as a user message).
+        let messages = vec![
+            Message::User {
+                content: vec![ContentBlock::Text {
                     text: seed.transform.to_string(),
-                },
-            ],
-        }];
+                }],
+            },
+            Message::Assistant {
+                content: json!([{
+                    "type": "tool_use",
+                    "id": SEED_CALL_ID,
+                    "name": SEED_TOOL,
+                    "input": Seed::seed_call_args(),
+                }]),
+            },
+            Message::User {
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: SEED_CALL_ID.to_string(),
+                    content: seed.selected.to_string(),
+                    is_error: false,
+                }],
+            },
+        ];
         let tools = tools
             .iter()
             .map(|t| ToolDef {
@@ -226,10 +241,21 @@ mod tests {
 
         assert_eq!(req["system"][0]["type"], "text");
         assert_eq!(req["system"][0]["text"], "SYS");
+        // The instruction is the only user message; `selected` is NOT among the
+        // user content, it arrives as the seeded `view` call's result below.
         assert_eq!(req["messages"][0]["role"], "user");
         assert_eq!(req["messages"][0]["content"][0]["type"], "text");
-        assert_eq!(req["messages"][0]["content"][0]["text"], "selected");
-        assert_eq!(req["messages"][0]["content"][1]["text"], "transform");
+        assert_eq!(req["messages"][0]["content"][0]["text"], "transform");
+        assert_eq!(req["messages"][0]["content"][1], Value::Null);
+        // The pre-seeded `view` call and its result — the sole carrier of `selected`.
+        assert_eq!(req["messages"][1]["role"], "assistant");
+        assert_eq!(req["messages"][1]["content"][0]["type"], "tool_use");
+        assert_eq!(req["messages"][1]["content"][0]["name"], "view");
+        let seed_id = req["messages"][1]["content"][0]["id"].clone();
+        assert_eq!(req["messages"][2]["role"], "user");
+        assert_eq!(req["messages"][2]["content"][0]["type"], "tool_result");
+        assert_eq!(req["messages"][2]["content"][0]["tool_use_id"], seed_id);
+        assert_eq!(req["messages"][2]["content"][0]["content"], "selected");
         assert_eq!(req["tool_choice"]["type"], "auto");
         let names: Vec<&str> = req["tools"]
             .as_array()
@@ -256,9 +282,11 @@ mod tests {
                 is_error: false,
             }],
         });
+        // Index 3: the three-message seed (user instruction, seeded `view` call,
+        // its result) occupies 0..3.
         let req = request_json(&agent);
-        let block = &req["messages"][1]["content"][0];
-        assert_eq!(req["messages"][1]["role"], "user");
+        let block = &req["messages"][3]["content"][0];
+        assert_eq!(req["messages"][3]["role"], "user");
         assert_eq!(block["type"], "tool_result");
         assert_eq!(block["tool_use_id"], "tu_1");
         assert_eq!(block["content"], "ok");
@@ -283,9 +311,10 @@ mod tests {
         agent.messages.push(Message::Assistant {
             content: raw.clone(),
         });
+        // Index 3: the three-message seed occupies 0..3.
         let req = request_json(&agent);
-        assert_eq!(req["messages"][1]["role"], "assistant");
-        assert_eq!(req["messages"][1]["content"], raw);
+        assert_eq!(req["messages"][3]["role"], "assistant");
+        assert_eq!(req["messages"][3]["content"], raw);
     }
 
     #[test]

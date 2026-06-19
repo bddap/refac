@@ -4,7 +4,7 @@ use schemars::Schema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::agent::{Model, RawCall, Seed, Tool, ToolResult};
+use crate::agent::{Model, RawCall, Seed, Tool, ToolResult, SEED_CALL_ID, SEED_TOOL};
 
 const API_URL: &str = "https://api.openai.com/v1/chat/completions";
 
@@ -110,15 +110,30 @@ struct Request<'a> {
 
 impl OpenaiAgent {
     pub fn new(key: String, model: String, seed: &Seed, tools: &[Tool]) -> Self {
+        // Open with the user's instruction, then a pre-seeded `view` call whose
+        // result is `selected` — so `selected` reaches the model once, as a tool
+        // result, exactly as a real `view` later would (never as a user message).
         let messages = vec![
             Message::System {
                 content: seed.system.to_string(),
             },
             Message::User {
-                content: seed.selected.to_string(),
-            },
-            Message::User {
                 content: seed.transform.to_string(),
+            },
+            Message::Assistant(AssistantTurn {
+                content: None,
+                tool_calls: Some(vec![ToolCall {
+                    id: SEED_CALL_ID.to_string(),
+                    kind: FunctionType::Function,
+                    function: FunctionCall {
+                        name: SEED_TOOL.to_string(),
+                        arguments: Seed::seed_call_args().to_string(),
+                    },
+                }]),
+            }),
+            Message::Tool {
+                tool_call_id: SEED_CALL_ID.to_string(),
+                content: seed.selected.to_string(),
             },
         ];
         let tools = tools
@@ -225,9 +240,17 @@ mod tests {
         assert_eq!(req["tool_choice"], "auto");
         assert_eq!(req["messages"][0]["role"], "system");
         assert_eq!(req["messages"][0]["content"], "SYS");
+        // The instruction is the only user message; `selected` is NOT a user
+        // message, it arrives as the seeded `view` call's result below.
         assert_eq!(req["messages"][1]["role"], "user");
-        assert_eq!(req["messages"][1]["content"], "selected");
-        assert_eq!(req["messages"][2]["content"], "transform");
+        assert_eq!(req["messages"][1]["content"], "transform");
+        // The pre-seeded `view` call and its result — the sole carrier of `selected`.
+        assert_eq!(req["messages"][2]["role"], "assistant");
+        assert_eq!(req["messages"][2]["tool_calls"][0]["function"]["name"], "view");
+        let seed_id = req["messages"][2]["tool_calls"][0]["id"].clone();
+        assert_eq!(req["messages"][3]["role"], "tool");
+        assert_eq!(req["messages"][3]["tool_call_id"], seed_id);
+        assert_eq!(req["messages"][3]["content"], "selected");
         assert_eq!(req["tools"][0]["type"], "function");
         let names: Vec<&str> = req["tools"]
             .as_array()
@@ -251,8 +274,10 @@ mod tests {
             tool_call_id: "c1".into(),
             content: "ok".into(),
         });
+        // Index 4: the four-message seed (system, user instruction, seeded `view`
+        // call, its result) occupies 0..4.
         let req = request_json(&agent);
-        let msg = &req["messages"][3];
+        let msg = &req["messages"][4];
         assert_eq!(msg["role"], "tool");
         assert_eq!(msg["tool_call_id"], "c1");
         assert_eq!(msg["content"], "ok");
@@ -280,11 +305,14 @@ mod tests {
         });
         let turn: AssistantTurn = serde_json::from_value(raw.clone()).unwrap();
         agent.messages.push(Message::Assistant(turn));
-        assert_eq!(request_json(&agent)["messages"][3], raw);
-        // The role-tagged enum must emit `role` exactly once (the bug a second,
-        // body-carried `role` would reintroduce).
+        // Index 4: the four-message seed occupies 0..4.
+        assert_eq!(request_json(&agent)["messages"][4], raw);
+        // Each assistant message's role-tagged enum must emit `role` exactly once
+        // (the bug a second, body-carried `role` would reintroduce). Two assistant
+        // turns here — the seeded `view` call and the one just pushed — so exactly
+        // two; a duplicated `role` would push the count past two.
         let wire = serde_json::to_string(&agent.request()).unwrap();
-        assert_eq!(wire.matches("\"role\":\"assistant\"").count(), 1);
+        assert_eq!(wire.matches("\"role\":\"assistant\"").count(), 2);
     }
 
     #[test]
