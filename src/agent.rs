@@ -14,9 +14,8 @@ use serde_json::Value;
 
 use crate::edit::{self, Edit};
 
-/// The complete conversation refac sends to start a session: the system prompt
-/// plus the user's one `(selected, transform)` turn — the only shape refac ever
-/// sends, so the agents take it whole and a malformed conversation can't be built.
+/// The one conversation shape refac ever sends, so the agents take it whole — a
+/// malformed conversation can't be built.
 pub struct Seed<'a> {
     pub system: &'a str,
     pub selected: &'a str,
@@ -77,13 +76,9 @@ impl Tool {
     }
 }
 
-/// The args type for the tools that take none — an empty struct so its schema
-/// comes from the same typed path as `edit`'s.
 #[derive(JsonSchema, serde::Deserialize)]
 struct NoArgs {}
 
-/// The tools refac offers. `edit` does the work; `view`/`reset` keep the model
-/// oriented; `finish` ends the loop.
 pub fn tools() -> Vec<Tool> {
     vec![
         Tool::new::<Edit>(
@@ -136,14 +131,12 @@ pub fn tools() -> Vec<Tool> {
     ]
 }
 
-/// A tool call as it comes off the wire, before refac knows it's valid.
 pub struct RawCall {
     pub id: String,
     pub name: String,
     pub args: Value,
 }
 
-/// What refac sends back for one tool call.
 pub struct ToolResult {
     pub id: String,
     pub content: String,
@@ -173,7 +166,6 @@ pub struct Attempt {
     pub error: Option<String>,
 }
 
-/// What the loop produced: the final text and every edit attempt along the way.
 #[derive(Debug)]
 pub struct Outcome {
     pub text: String,
@@ -259,7 +251,6 @@ pub fn run(model: &mut dyn Model, original: String, max_turns: usize) -> Result<
     anyhow::bail!("edit loop hit its {max_turns}-turn limit")
 }
 
-/// A blocking HTTP client with refac's standard timeout, shared by the agents.
 pub fn http_client() -> reqwest::blocking::Client {
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(60 * 4))
