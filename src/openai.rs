@@ -1,6 +1,5 @@
 //! OpenAI chat-completions API edit-mode agent.
 
-use anyhow::Context;
 use schemars::Schema;
 use serde::Serialize;
 use serde_json::Value;
@@ -17,15 +16,15 @@ const API_URL: &str = "https://api.openai.com/v1/chat/completions";
 #[serde(untagged)]
 enum Message {
     System {
-        role: Role,
+        role: SystemRole,
         content: String,
     },
     User {
-        role: Role,
+        role: UserRole,
         content: String,
     },
     Tool {
-        role: Role,
+        role: ToolRole,
         tool_call_id: String,
         content: String,
     },
@@ -35,11 +34,21 @@ enum Message {
     Assistant(Value),
 }
 
-#[derive(Serialize, Clone, Copy)]
+// Per-variant singleton roles, so a message's `role` is fixed by its type and
+// can't be constructed wrong (untagged Serialize emits the field as-is).
+#[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
-enum Role {
+enum SystemRole {
     System,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum UserRole {
     User,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ToolRole {
     Tool,
 }
 
@@ -51,7 +60,6 @@ struct ToolDef {
     function: FunctionDef,
 }
 
-/// A unit enum so the `type` field can only ever serialize to `"function"`.
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
 enum FunctionType {
@@ -85,15 +93,15 @@ impl OpenaiAgent {
     pub fn new(key: String, model: String, seed: &Seed, tools: &[Tool]) -> Self {
         let messages = vec![
             Message::System {
-                role: Role::System,
+                role: SystemRole::System,
                 content: seed.system.to_string(),
             },
             Message::User {
-                role: Role::User,
+                role: UserRole::User,
                 content: seed.selected.to_string(),
             },
             Message::User {
-                role: Role::User,
+                role: UserRole::User,
                 content: seed.transform.to_string(),
             },
         ];
@@ -132,13 +140,12 @@ impl Model for OpenaiAgent {
         // Answer the previous turn's tool calls first. chat-completions has no
         // error flag on a tool message, so mark failures in the content.
         for r in results {
-            let content = if r.is_error {
-                format!("ERROR: {}", r.content)
-            } else {
-                r.content
+            let content = match r.result {
+                Ok(c) => c,
+                Err(c) => format!("ERROR: {c}"),
             };
             self.messages.push(Message::Tool {
-                role: Role::Tool,
+                role: ToolRole::Tool,
                 tool_call_id: r.id,
                 content,
             });
@@ -179,21 +186,7 @@ fn calls_from_message(message: &Value) -> Vec<RawCall> {
 }
 
 fn post(client: &reqwest::blocking::Client, key: &str, req: &Request) -> anyhow::Result<Value> {
-    let response = client
-        .post(API_URL)
-        .bearer_auth(key)
-        .json(req)
-        .send()
-        .context("Failed to send request to OpenAI API")?;
-    let status = response.status();
-    let body = response
-        .json::<Value>()
-        .with_context(|| anyhow::anyhow!("Status: {status}. Failed to parse response body."))?;
-    if !status.is_success() {
-        let pretty = serde_json::to_string_pretty(&body).unwrap_or_else(|_| body.to_string());
-        anyhow::bail!("Status: {status}. Body: {pretty}");
-    }
-    Ok(body)
+    crate::backend::send_json(client.post(API_URL).bearer_auth(key).json(req))
 }
 
 #[cfg(test)]
@@ -201,8 +194,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// The wire JSON refac actually sends — the unit tests assert against this,
-    /// so they prove the typed structs serialize to the same bytes as before.
+    /// The wire JSON refac actually sends — the unit tests pin the typed structs
+    /// to this exact shape so a serialization change can't silently break it.
     fn request_json(agent: &OpenaiAgent) -> Value {
         serde_json::to_value(agent.request()).unwrap()
     }
@@ -244,7 +237,7 @@ mod tests {
         };
         let mut agent = OpenaiAgent::new("k".into(), "m".into(), &seed, &tools);
         agent.messages.push(Message::Tool {
-            role: Role::Tool,
+            role: ToolRole::Tool,
             tool_call_id: "c1".into(),
             content: "ok".into(),
         });

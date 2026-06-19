@@ -1,6 +1,5 @@
 //! Anthropic (Claude) Messages API edit-mode agent.
 
-use anyhow::Context;
 use schemars::Schema;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -8,16 +7,6 @@ use serde_json::{json, Value};
 use crate::agent::{Model, RawCall, Seed, Tool, ToolResult};
 
 const MAX_TOKENS: u32 = 80000;
-
-/// Anthropic 400s on an empty text block, so render empty fields as a visible
-/// placeholder.
-fn field_or_placeholder(field: &str) -> &str {
-    if field.is_empty() {
-        "(empty)"
-    } else {
-        field
-    }
-}
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -29,7 +18,6 @@ struct SystemBlock {
     text: String,
 }
 
-/// A unit enum so the `type` field can only ever serialize to `"text"`.
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
 enum TextType {
@@ -71,7 +59,6 @@ struct ToolDef {
     input_schema: Schema,
 }
 
-/// Serializes to `{"type":"auto"}`: let the model decide whether to call a tool.
 #[derive(Serialize)]
 struct ToolChoiceAuto {
     #[serde(rename = "type")]
@@ -113,10 +100,10 @@ impl AnthropicAgent {
         let messages = vec![Message::User {
             content: vec![
                 ContentBlock::Text {
-                    text: field_or_placeholder(seed.selected).to_string(),
+                    text: seed.selected.to_string(),
                 },
                 ContentBlock::Text {
-                    text: field_or_placeholder(seed.transform).to_string(),
+                    text: seed.transform.to_string(),
                 },
             ],
         }];
@@ -158,10 +145,16 @@ impl Model for AnthropicAgent {
         if !results.is_empty() {
             let content = results
                 .into_iter()
-                .map(|r| ContentBlock::ToolResult {
-                    tool_use_id: r.id,
-                    content: r.content,
-                    is_error: r.is_error,
+                .map(|r| {
+                    let (content, is_error) = match r.result {
+                        Ok(c) => (c, false),
+                        Err(c) => (c, true),
+                    };
+                    ContentBlock::ToolResult {
+                        tool_use_id: r.id,
+                        content,
+                        is_error,
+                    }
                 })
                 .collect();
             self.messages.push(Message::User { content });
@@ -201,31 +194,21 @@ fn post(client: &reqwest::blocking::Client, key: &str, req: &Request) -> anyhow:
         "anthropic request: {}",
         serde_json::to_value(req).unwrap_or_default()
     );
-    let response = client
-        .post(API_URL)
-        .header("x-api-key", key)
-        .header("anthropic-version", ANTHROPIC_VERSION)
-        .header("content-type", "application/json")
-        .json(req)
-        .send()
-        .context("Failed to send request to Anthropic API")?;
-    let status = response.status();
-    let body = response
-        .json::<Value>()
-        .with_context(|| anyhow::anyhow!("Status: {status}. Failed to parse response body."))?;
-    if !status.is_success() {
-        let pretty = serde_json::to_string_pretty(&body).unwrap_or_else(|_| body.to_string());
-        anyhow::bail!("Status: {status}. Body: {pretty}");
-    }
-    Ok(body)
+    crate::backend::send_json(
+        client
+            .post(API_URL)
+            .header("x-api-key", key)
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .json(req),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The wire JSON refac actually sends — the unit tests assert against this,
-    /// so they prove the typed structs serialize to the same bytes as before.
+    /// The wire JSON refac actually sends — the unit tests pin the typed structs
+    /// to this exact shape so a serialization change can't silently break it.
     fn request_json(agent: &AnthropicAgent) -> Value {
         serde_json::to_value(agent.request()).unwrap()
     }

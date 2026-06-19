@@ -2,7 +2,8 @@
 
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use serde_json::Value;
 
 use crate::agent::{Model, Seed, Tool};
 use crate::anthropic::AnthropicAgent;
@@ -42,6 +43,21 @@ pub fn http_client() -> reqwest::blocking::Client {
         .timeout(Duration::from_secs(60 * 4))
         .build()
         .expect("building HTTP client")
+}
+
+/// Send a built (authed, JSON-bodied) request and return the parsed response.
+/// Reads the body as text first so a non-JSON error page — what a gateway or
+/// proxy returns on 429/5xx — survives into the error instead of being lost to a
+/// JSON-parse failure.
+pub fn send_json(request: reqwest::blocking::RequestBuilder) -> Result<Value> {
+    let response = request.send().context("sending request")?;
+    let status = response.status();
+    let body = response.text().context("reading response body")?;
+    if !status.is_success() {
+        anyhow::bail!("Status: {status}. Body: {body}");
+    }
+    serde_json::from_str(&body)
+        .with_context(|| format!("Status: {status}. Response body was not JSON: {body}"))
 }
 
 #[cfg(test)]

@@ -104,17 +104,22 @@ fn refactor(
     let provider = config.provider(sc);
     let model = config.model(provider);
 
+    // The buffer the model edits and the `selected` it's shown must be the same
+    // string, including the empty-input placeholder: that's what lets the model
+    // turn an empty selection into generated text — it `edit`s the placeholder
+    // away. (Anthropic also 400s on an empty text block.)
+    let seed_selected = agent::placeholder_if_empty(&selected).to_owned();
     let seed = agent::Seed {
         system: prompt::SYSTEM_PROMPT,
-        selected: &selected,
-        transform: &transform,
+        selected: &seed_selected,
+        transform: agent::placeholder_if_empty(&transform),
     };
     let tools = agent::tools();
     let mut model_agent = backend::resolve_agent(provider, &model, sc, &seed, &tools)?;
 
     let outcome = agent::run(
         model_agent.as_mut(),
-        selected.clone(),
+        seed_selected,
         agent::DEFAULT_MAX_TURNS,
     )?;
 

@@ -16,9 +16,8 @@ pub struct Secrets {
 }
 
 impl Secrets {
-    /// Load secrets from `secrets.toml`, with env vars (`OPENAI_API_KEY`,
-    /// `ANTHROPIC_API_KEY`) taking precedence. A missing file is not an error —
-    /// env vars alone are enough.
+    /// Env vars (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) take precedence over
+    /// `secrets.toml`, and a missing file is fine — env vars alone are enough.
     pub fn load() -> anyhow::Result<Self> {
         let mut secrets: Secrets = match base()?.find_config_file("secrets.toml") {
             Some(path) => toml::from_str(&fs::read_to_string(path)?)?,
@@ -81,13 +80,11 @@ impl Config {
             None => Config::default(),
         };
         if let Ok(from_env) = std::env::var("REFAC_PROVIDER") {
-            ret.provider = Some(match from_env.to_lowercase().as_str() {
-                "anthropic" => Provider::Anthropic,
-                "openai" => Provider::Openai,
-                other => anyhow::bail!(
-                    "invalid REFAC_PROVIDER {other:?}; expected \"anthropic\" or \"openai\""
-                ),
-            });
+            // Parse through the same ValueEnum that defines the variants, so the
+            // accepted spellings can't drift from `Provider` itself.
+            let provider = clap::ValueEnum::from_str(&from_env, /* ignore_case */ true)
+                .map_err(|e| anyhow::anyhow!("invalid REFAC_PROVIDER: {e}"))?;
+            ret.provider = Some(provider);
         }
         if let Ok(from_env) = std::env::var("REFAC_MODEL") {
             ret.model = Some(from_env);

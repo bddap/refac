@@ -2,7 +2,7 @@
 //! refac applies each, feeds the result back, and repeats until the model
 //! finishes or a guard trips. Provider-agnostic and IO-free — a [`Model`] is one
 //! turn (send the conversation + tools, get back the calls); the providers
-//! implement it over their wire formats, the tests with a script.
+//! implement it over their wire formats.
 
 use std::collections::HashMap;
 
@@ -21,6 +21,17 @@ pub struct Seed<'a> {
     pub transform: &'a str,
 }
 
+/// Both providers reject (or, for OpenAI, would silently send) an empty user
+/// field; render it as a visible placeholder. Shared so the two wire formats
+/// can't disagree about what an empty selection looks like.
+pub fn placeholder_if_empty(field: &str) -> &str {
+    if field.is_empty() {
+        "(empty)"
+    } else {
+        field
+    }
+}
+
 /// Read-only state a tool may consult beyond the live buffer, so `reset` need not
 /// close over the original.
 pub struct Ctx<'a> {
@@ -29,11 +40,10 @@ pub struct Ctx<'a> {
 
 /// A tool's reply to the model: `Ok` shown as the result, `Err` as an error
 /// result. (The handler's *outer* `Result` is a malformed call instead.)
-type Reply = std::result::Result<String, String>;
+pub type Reply = std::result::Result<String, String>;
 
-/// What one tool call does to the loop. `Finish` ends it; `Continue` replies to
-/// the model and, for `edit`, carries the [`Attempt`] to log — so each tool owns
-/// its whole behavior and `run` needs no per-tool special cases.
+/// What one tool call does to the loop. Each tool returns its own `Step` —
+/// including the optional [`Attempt`] to log — so `run` needs no per-tool cases.
 enum Step {
     Continue {
         reply: Reply,
@@ -143,10 +153,12 @@ pub struct RawCall {
     pub args: Value,
 }
 
+/// One field, not a `(String, bool)`, so "is this an error" can't disagree with
+/// the content — each provider renders the two arms its own way (Anthropic's
+/// `is_error` flag, OpenAI's `ERROR:` prefix).
 pub struct ToolResult {
     pub id: String,
-    pub content: String,
-    pub is_error: bool,
+    pub result: Reply,
 }
 
 /// One assistant turn. Folding "answer the previous calls" and "take the next
@@ -175,8 +187,7 @@ pub struct Outcome {
     pub attempts: Vec<Attempt>,
 }
 
-/// Run the edit loop over `original`. `max_turns` caps assistant turns so
-/// `view`/`reset` can't spin forever.
+/// `max_turns` caps assistant turns so `view`/`reset` can't spin forever.
 pub fn run(model: &mut dyn Model, original: String, max_turns: usize) -> Result<Outcome> {
     let tools = tools();
     let by_name: HashMap<&str, &Tool> = tools.iter().map(|t| (t.name, t)).collect();
@@ -229,10 +240,7 @@ pub fn run(model: &mut dyn Model, original: String, max_turns: usize) -> Result<
                 attempts.push(attempt);
             }
 
-            results.push(match reply {
-                Ok(content) => ok(id, content),
-                Err(msg) => err_result(id, msg),
-            });
+            results.push(ToolResult { id, result: reply });
         }
 
         // A turn "fails" only if it tried to edit and every edit missed; a turn
@@ -252,22 +260,6 @@ pub fn run(model: &mut dyn Model, original: String, max_turns: usize) -> Result<
     }
 
     anyhow::bail!("edit loop hit its {max_turns}-turn limit")
-}
-
-fn ok(id: String, content: String) -> ToolResult {
-    ToolResult {
-        id,
-        content,
-        is_error: false,
-    }
-}
-
-fn err_result(id: String, content: String) -> ToolResult {
-    ToolResult {
-        id,
-        content,
-        is_error: true,
-    }
 }
 
 #[cfg(test)]
@@ -329,6 +321,20 @@ mod tests {
     }
 
     #[test]
+    fn empty_selection_placeholder_is_editable_into_generated_text() {
+        // refac advertises generation from an empty selection (README fizzbuzz).
+        // The buffer is seeded with the same placeholder the model is shown, so
+        // the model turns it into output by editing the placeholder away.
+        let seeded = placeholder_if_empty("");
+        let mut m = ScriptedModel::new(vec![
+            vec![edit_call("1", "(empty)", "fn main() {}")],
+            vec![call("2", "finish")],
+        ]);
+        let out = run(&mut m, seeded.to_string(), TURNS).unwrap().text;
+        assert_eq!(out, "fn main() {}");
+    }
+
+    #[test]
     fn parallel_edits_in_one_turn() {
         let mut m = ScriptedModel::new(vec![vec![
             edit_call("1", "one", "1"),
@@ -354,8 +360,8 @@ mod tests {
         ]);
         let out = run(&mut m, "a".into(), TURNS).unwrap().text;
         assert_eq!(out, "b");
-        assert!(m.seen[1][0].is_error);
-        assert!(m.seen[1][0].content.contains("could not find"));
+        let err = m.seen[1][0].result.as_ref().unwrap_err();
+        assert!(err.contains("could not find"));
     }
 
     #[test]
@@ -367,8 +373,7 @@ mod tests {
         ]);
         let out = run(&mut m, "a".into(), TURNS).unwrap().text;
         assert_eq!(out, "b");
-        assert_eq!(m.seen[2][0].content, "b");
-        assert!(!m.seen[2][0].is_error);
+        assert_eq!(m.seen[2][0].result, Ok("b".to_string()));
     }
 
     #[test]
@@ -380,7 +385,7 @@ mod tests {
         ]);
         let out = run(&mut m, "a".into(), TURNS).unwrap().text;
         assert_eq!(out, "a");
-        assert_eq!(m.seen[2][0].content, "a");
+        assert_eq!(m.seen[2][0].result, Ok("a".to_string()));
     }
 
     #[test]
@@ -391,8 +396,8 @@ mod tests {
         ]);
         let out = run(&mut m, "x".into(), TURNS).unwrap().text;
         assert_eq!(out, "x");
-        assert!(m.seen[1][0].is_error);
-        assert!(m.seen[1][0].content.contains("unknown tool"));
+        let err = m.seen[1][0].result.as_ref().unwrap_err();
+        assert!(err.contains("unknown tool"));
     }
 
     #[test]

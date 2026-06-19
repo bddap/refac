@@ -5,10 +5,9 @@
 //! replacement to the selected text. The hard part is that the model's `old`
 //! rarely matches byte-for-byte — indentation drifts, whitespace reflows, a
 //! block gets reworded. So matching runs a chain of progressively looser
-//! strategies (borrowed from opencode's `replace()`), exact first, and the first
-//! candidate that lands a *unique* hit wins. A match that's missing or ambiguous
-//! is an error fed back to the model, never a silent mis-apply (the contract
-//! claude-code's str_replace established).
+//! strategies, exact first, and the first candidate that lands a *unique* hit
+//! wins. A match that's missing or ambiguous is an error fed back to the model,
+//! never a silent mis-apply: a wrong edit is worse than a refused one.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -78,6 +77,13 @@ pub fn apply(src: &str, edit: &Edit) -> Result<String, EditError> {
 
     for replacer in CHAIN {
         for cand in replacer(src, &edit.old) {
+            // A blank `old` line trims to "" and yields an empty span; matching
+            // "" hits between every char, so `replace_all` would splatter `new`
+            // across the whole buffer. Skip it — an empty candidate is never a
+            // real match.
+            if cand.is_empty() {
+                continue;
+            }
             let count = src.matches(cand.as_str()).count();
             match (count, edit.replace_all) {
                 (0, _) => continue,
@@ -381,7 +387,7 @@ mod tests {
     fn dedented_old_matches_indented_source() {
         // The model wrote `old` without the source's indentation; we still find
         // the block. `new` is spliced verbatim, so the model owns the
-        // indentation it wants in the result (same contract as claude-code).
+        // indentation it wants in the result.
         let src = "if cond:\n        a = 1\n        b = 2\n";
         let old = "a = 1\nb = 2";
         let new = "        a = 10\n        b = 20";
@@ -414,6 +420,22 @@ mod tests {
         let old = "fn f() {\n    let a = compute();\n    let b = a + 1;\n    return result;\n}";
         let got = run(src, old, "fn f() { 42 }").unwrap();
         assert_eq!(got, "fn f() { 42 }");
+    }
+
+    #[test]
+    fn blank_old_does_not_splatter_under_replace_all() {
+        // A whitespace-only `old` trims to "" and the line matchers yield empty
+        // spans; without the empty-candidate guard, replace_all on "" would
+        // rewrite between every char. It must report NotFound instead.
+        let e = Edit {
+            old: " ".into(),
+            new: "X".into(),
+            replace_all: true,
+        };
+        assert!(matches!(
+            apply("a\n\nb", &e),
+            Err(EditError::NotFound { .. })
+        ));
     }
 
     #[test]
