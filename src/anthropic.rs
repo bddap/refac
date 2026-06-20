@@ -1,6 +1,6 @@
 use schemars::Schema;
-use serde::Serialize;
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use crate::agent::{Model, RawCall, Seed, Tool, ToolResult, SEED_CALL_ID, SEED_TOOL};
 
@@ -39,7 +39,33 @@ enum ContentBlock {
 #[serde(tag = "role", rename_all = "snake_case")]
 enum Message {
     User { content: Vec<ContentBlock> },
-    Assistant { content: Value },
+    Assistant { content: Vec<AssistantBlock> },
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum AssistantBlock {
+    Text {
+        text: String,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
+    Thinking {
+        thinking: String,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
+    RedactedThinking {
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: Value,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
 }
 
 #[derive(Serialize)]
@@ -50,15 +76,12 @@ struct ToolDef {
 }
 
 #[derive(Serialize)]
-struct ToolChoiceAuto {
-    #[serde(rename = "type")]
-    kind: AutoType,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "snake_case")]
-enum AutoType {
+#[serde(tag = "type", rename_all = "snake_case")]
+#[allow(dead_code)]
+enum ToolChoice {
     Auto,
+    Any,
+    Tool { name: String },
 }
 
 pub struct AnthropicAgent {
@@ -76,7 +99,7 @@ struct Request<'a> {
     max_tokens: u32,
     messages: &'a [Message],
     tools: &'a [ToolDef],
-    tool_choice: ToolChoiceAuto,
+    tool_choice: ToolChoice,
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     system: &'a [SystemBlock],
 }
@@ -94,12 +117,12 @@ impl AnthropicAgent {
                 }],
             },
             Message::Assistant {
-                content: json!([{
-                    "type": "tool_use",
-                    "id": SEED_CALL_ID,
-                    "name": SEED_TOOL,
-                    "input": Seed::seed_call_args(),
-                }]),
+                content: vec![AssistantBlock::ToolUse {
+                    id: SEED_CALL_ID.to_string(),
+                    name: SEED_TOOL.to_string(),
+                    input: Seed::seed_call_args(),
+                    extra: Map::new(),
+                }],
             },
             Message::User {
                 content: vec![ContentBlock::ToolResult {
@@ -133,9 +156,7 @@ impl AnthropicAgent {
             max_tokens: MAX_TOKENS,
             messages: &self.messages,
             tools: &self.tools,
-            tool_choice: ToolChoiceAuto {
-                kind: AutoType::Auto,
-            },
+            tool_choice: ToolChoice::Auto,
             system: &self.system,
         }
     }
@@ -166,24 +187,26 @@ impl Model for AnthropicAgent {
             .get("content")
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("Anthropic response missing content: {body}"))?;
+        let content: Vec<AssistantBlock> = serde_json::from_value(content)
+            .map_err(|e| anyhow::anyhow!("Anthropic content did not parse: {e}"))?;
         let calls = calls_from_content(&content);
         self.messages.push(Message::Assistant { content });
         Ok(calls)
     }
 }
 
-fn calls_from_content(content: &Value) -> Vec<RawCall> {
+fn calls_from_content(content: &[AssistantBlock]) -> Vec<RawCall> {
     content
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|b| b.get("type").and_then(Value::as_str) == Some("tool_use"))
-        .filter_map(|b| {
-            Some(RawCall {
-                id: b.get("id")?.as_str()?.to_string(),
-                name: b.get("name")?.as_str()?.to_string(),
-                args: b.get("input").cloned().unwrap_or_else(|| json!({})),
-            })
+        .iter()
+        .filter_map(|b| match b {
+            AssistantBlock::ToolUse {
+                id, name, input, ..
+            } => Some(RawCall {
+                id: id.clone(),
+                name: name.clone(),
+                args: input.clone(),
+            }),
+            _ => None,
         })
         .collect()
 }
@@ -205,9 +228,26 @@ fn post(client: &reqwest::blocking::Client, key: &str, req: &Request) -> anyhow:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn request_json(agent: &AnthropicAgent) -> Value {
         serde_json::to_value(agent.request()).unwrap()
+    }
+
+    #[test]
+    fn tool_choice_serializes_to_wire_shape() {
+        assert_eq!(
+            serde_json::to_value(ToolChoice::Auto).unwrap(),
+            json!({ "type": "auto" })
+        );
+        assert_eq!(
+            serde_json::to_value(ToolChoice::Any).unwrap(),
+            json!({ "type": "any" })
+        );
+        assert_eq!(
+            serde_json::to_value(ToolChoice::Tool { name: "edit".into() }).unwrap(),
+            json!({ "type": "tool", "name": "edit" })
+        );
     }
 
     #[test]
@@ -283,9 +323,8 @@ mod tests {
             { "type": "thinking", "thinking": "hmm", "signature": "sig" },
             { "type": "tool_use", "id": "tu_1", "name": "edit", "input": { "old": "a", "new": "b" } }
         ]);
-        agent.messages.push(Message::Assistant {
-            content: raw.clone(),
-        });
+        let content: Vec<AssistantBlock> = serde_json::from_value(raw.clone()).unwrap();
+        agent.messages.push(Message::Assistant { content });
         let req = request_json(&agent);
         assert_eq!(req["messages"][3]["role"], "assistant");
         assert_eq!(req["messages"][3]["content"], raw);
@@ -293,12 +332,13 @@ mod tests {
 
     #[test]
     fn parses_tool_use_blocks() {
-        let content = json!([
+        let content: Vec<AssistantBlock> = serde_json::from_value(json!([
             { "type": "text", "text": "let me fix that" },
             { "type": "tool_use", "id": "tu_1", "name": "edit",
               "input": { "old": "a", "new": "b" } },
             { "type": "tool_use", "id": "tu_2", "name": "finish", "input": {} }
-        ]);
+        ]))
+        .unwrap();
         let calls = calls_from_content(&content);
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].id, "tu_1");
@@ -309,7 +349,8 @@ mod tests {
 
     #[test]
     fn no_tool_use_is_no_calls() {
-        let content = json!([{ "type": "text", "text": "all done" }]);
+        let content: Vec<AssistantBlock> =
+            serde_json::from_value(json!([{ "type": "text", "text": "all done" }])).unwrap();
         assert!(calls_from_content(&content).is_empty());
     }
 }

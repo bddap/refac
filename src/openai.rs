@@ -1,6 +1,6 @@
 use schemars::Schema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::agent::{Model, RawCall, Seed, Tool, ToolResult, SEED_CALL_ID, SEED_TOOL};
 
@@ -28,19 +28,28 @@ struct ToolCall {
     #[serde(rename = "type")]
     kind: FunctionType,
     function: FunctionCall,
+    #[serde(flatten)]
+    extra: Map<String, Value>,
 }
 
 #[derive(Serialize, Deserialize)]
 struct FunctionCall {
     name: String,
     arguments: String,
+    #[serde(flatten)]
+    extra: Map<String, Value>,
 }
 
 #[derive(Serialize, Deserialize)]
 struct AssistantTurn {
+    #[serde(default, skip_serializing)]
+    #[allow(dead_code)]
+    role: Option<String>,
     content: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<ToolCall>>,
+    #[serde(flatten)]
+    extra: Map<String, Value>,
 }
 
 #[derive(Serialize)]
@@ -89,6 +98,7 @@ impl OpenaiAgent {
                 content: seed.transform.to_string(),
             },
             Message::Assistant(AssistantTurn {
+                role: None,
                 content: None,
                 tool_calls: Some(vec![ToolCall {
                     id: SEED_CALL_ID.to_string(),
@@ -96,8 +106,11 @@ impl OpenaiAgent {
                     function: FunctionCall {
                         name: SEED_TOOL.to_string(),
                         arguments: Seed::seed_call_args().to_string(),
+                        extra: Map::new(),
                     },
+                    extra: Map::new(),
                 }]),
+                extra: Map::new(),
             }),
             Message::Tool {
                 tool_call_id: SEED_CALL_ID.to_string(),
@@ -259,6 +272,31 @@ mod tests {
         assert_eq!(request_json(&agent)["messages"][4], raw);
         let wire = serde_json::to_string(&agent.request()).unwrap();
         assert_eq!(wire.matches("\"role\":\"assistant\"").count(), 2);
+    }
+
+    #[test]
+    fn echoed_assistant_turn_retains_unmodeled_fields_without_duplicate_role() {
+        let api_msg = json!({
+            "role": "assistant",
+            "content": null,
+            "refusal": null,
+            "reasoning": "let me think",
+            "tool_calls": [
+                { "id": "c1", "type": "function", "index": 0,
+                  "function": { "name": "edit", "arguments": "{\"old\":\"a\",\"new\":\"b\"}" } }
+            ]
+        });
+        let turn: AssistantTurn = serde_json::from_value(api_msg.clone()).unwrap();
+        let wire = serde_json::to_string(&Message::Assistant(turn)).unwrap();
+        assert_eq!(wire.matches("\"role\":\"assistant\"").count(), 1);
+        let back: Value = serde_json::from_str(&wire).unwrap();
+        assert_eq!(back["refusal"], api_msg["refusal"]);
+        assert_eq!(back["reasoning"], api_msg["reasoning"]);
+        assert_eq!(back["tool_calls"][0]["index"], api_msg["tool_calls"][0]["index"]);
+        assert_eq!(
+            back["tool_calls"][0]["function"]["arguments"],
+            api_msg["tool_calls"][0]["function"]["arguments"]
+        );
     }
 
     #[test]
