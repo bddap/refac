@@ -15,7 +15,6 @@ repository = "https://github.com/bddap/refac"
 [dependencies]
 anyhow = "1.0.69"
 clap = { version = "4.1.8", features = ["derive"] }
-itertools = "0.10.5"
 reqwest = { version = "0.13", default-features = false, features = [
   "rustls",
   "blocking",
@@ -23,9 +22,9 @@ reqwest = { version = "0.13", default-features = false, features = [
 ] }
 rpassword = "7.5.0"
 dialoguer = "0.11"
+schemars = "1.0"
 serde = { version = "1.0.154", features = ["derive"] }
 serde_json = "1.0.94"
-similar = "2.2.1"
 toml = "0.7.3"
 tracing = "0.1.37"
 tracing-subscriber = "0.3.20"

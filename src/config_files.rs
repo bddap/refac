@@ -16,9 +16,6 @@ pub struct Secrets {
 }
 
 impl Secrets {
-    /// Load secrets from `secrets.toml`, with env vars (`OPENAI_API_KEY`,
-    /// `ANTHROPIC_API_KEY`) taking precedence. A missing file is not an error —
-    /// env vars alone are enough.
     pub fn load() -> anyhow::Result<Self> {
         let mut secrets: Secrets = match base()?.find_config_file("secrets.toml") {
             Some(path) => toml::from_str(&fs::read_to_string(path)?)?,
@@ -36,7 +33,6 @@ impl Secrets {
     pub fn save(&self) -> anyhow::Result<()> {
         let path = base()?.place_config_file("secrets.toml")?;
         let contents = toml::to_string(self)?;
-        // Holds the API key in cleartext — keep it owner-only.
         #[cfg(unix)]
         {
             use std::io::Write;
@@ -48,8 +44,6 @@ impl Secrets {
                 .mode(0o600)
                 .open(&path)?
                 .write_all(contents.as_bytes())?;
-            // `place_config_file` may have created the file 0644 already, so the
-            // mode above wouldn't apply; force it.
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
         }
@@ -66,24 +60,12 @@ pub enum Provider {
     Openai,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Config {
-    /// Explicit provider choice. When unset, it is inferred from which API keys
-    /// are configured (see `provider`).
     #[serde(default)]
     pub provider: Option<Provider>,
-    /// Model id. If unset, a sensible default is chosen per provider (see `model()`).
     #[serde(default)]
     pub model: Option<String>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            provider: None,
-            model: None,
-        }
-    }
 }
 
 impl Config {
@@ -93,13 +75,9 @@ impl Config {
             None => Config::default(),
         };
         if let Ok(from_env) = std::env::var("REFAC_PROVIDER") {
-            ret.provider = Some(match from_env.to_lowercase().as_str() {
-                "anthropic" => Provider::Anthropic,
-                "openai" => Provider::Openai,
-                other => anyhow::bail!(
-                    "invalid REFAC_PROVIDER {other:?}; expected \"anthropic\" or \"openai\""
-                ),
-            });
+            let provider = clap::ValueEnum::from_str(&from_env, true)
+                .map_err(|e| anyhow::anyhow!("invalid REFAC_PROVIDER: {e}"))?;
+            ret.provider = Some(provider);
         }
         if let Ok(from_env) = std::env::var("REFAC_MODEL") {
             ret.model = Some(from_env);
@@ -107,9 +85,6 @@ impl Config {
         Ok(ret)
     }
 
-    /// Resolve the effective provider. An explicit choice (config file or
-    /// `REFAC_PROVIDER`) always wins; otherwise infer from which API keys are
-    /// configured, leaning Anthropic when both or neither are present.
     pub fn provider(&self, secrets: &Secrets) -> Provider {
         if let Some(p) = self.provider {
             return p;

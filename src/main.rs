@@ -1,12 +1,12 @@
+mod agent;
 mod anthropic;
-mod api;
-mod api_client;
+mod backend;
 mod config_files;
+mod edit;
 mod openai;
 mod prompt;
 
 use anyhow::Context;
-use api::Message;
 use clap::Parser;
 use config_files::{Config, Provider, Secrets};
 use serde::Serialize;
@@ -18,8 +18,6 @@ use std::{
 };
 use xdg::BaseDirectories;
 
-use crate::prompt::chat_prefix;
-
 #[derive(Parser)]
 #[clap(version, author, about)]
 struct Opts {
@@ -29,13 +27,10 @@ struct Opts {
 
 #[derive(Parser)]
 enum SubCommand {
-    /// Save your API key for future use. Pass `--provider`, or pick one interactively.
     Login {
         #[clap(long)]
         provider: Option<Provider>,
     },
-    /// Apply the instructions encoded in `transform` to the text in `selected`.
-    /// Get it? 'refac tor'
     Tor { selected: String, transform: String },
 }
 
@@ -44,7 +39,7 @@ fn main() {
     match run() {
         Ok(()) => {}
         Err(e) => {
-            eprintln!("{:?}", e);
+            eprintln!("{e:?}");
             std::process::exit(1);
         }
     }
@@ -90,7 +85,7 @@ fn run() -> anyhow::Result<()> {
             let secrets = Secrets::load()?;
             let config = Config::load()?;
             let completion = refactor(selected, transform, &secrets, &config)?;
-            print!("{}", completion);
+            print!("{completion}");
         }
     };
 
@@ -103,30 +98,37 @@ fn refactor(
     sc: &Secrets,
     config: &Config,
 ) -> anyhow::Result<String> {
-    let mut messages = chat_prefix();
-    messages.push(Message::user(vec![selected.clone(), transform.clone()]));
-
     let provider = config.provider(sc);
     let model = config.model(provider);
 
-    let output = match provider {
-        Provider::Anthropic => {
-            let key = sc.anthropic_api_key.as_deref().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "No Anthropic API key found. Set ANTHROPIC_API_KEY or run 'refac login'."
-                )
-            })?;
-            anthropic::complete(key, &model, &messages)?
-        }
-        Provider::Openai => {
-            let key = sc.openai_api_key.as_deref().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "No OpenAI API key found. Set OPENAI_API_KEY or run 'refac login'."
-                )
-            })?;
-            openai::complete(key, &model, &messages)?
-        }
+    let seed_selected = agent::placeholder_if_empty(&selected).to_owned();
+    let seed = agent::Seed {
+        system: prompt::SYSTEM_PROMPT,
+        selected: &seed_selected,
+        transform: agent::placeholder_if_empty(&transform),
     };
+    let tools = agent::tools();
+    let mut model_agent = backend::resolve_agent(provider, &model, sc, &seed, &tools)?;
+
+    let outcome = agent::run(
+        model_agent.as_mut(),
+        seed_selected,
+        agent::DEFAULT_MAX_TURNS,
+    )?;
+
+    for attempt in &outcome.attempts {
+        let _ = log(
+            EditLog {
+                provider,
+                model: model.clone(),
+                old: attempt.edit.old.clone(),
+                new: attempt.edit.new.clone(),
+                error: attempt.error.as_ref().map(|e| e.to_string()),
+            },
+            "edits",
+        );
+    }
+    let output = outcome.text;
 
     log(
         LogEntry {
@@ -142,6 +144,15 @@ fn refactor(
     Ok(output)
 }
 
+#[derive(Debug, Serialize)]
+struct EditLog {
+    provider: Provider,
+    model: String,
+    old: String,
+    new: String,
+    error: Option<String>,
+}
+
 fn log_location(title: &str) -> anyhow::Result<PathBuf> {
     let bd = BaseDirectories::with_prefix("refac")?;
     let ret = bd.get_data_file(format!("{title}.jsonl"));
@@ -151,7 +162,6 @@ fn log_location(title: &str) -> anyhow::Result<PathBuf> {
         tracing::debug!("Logging to {:?}", bd.get_data_home());
     });
 
-    // ensure the parent directory exists
     ret.parent().map(create_dir_all).transpose()?;
 
     Ok(ret)
@@ -174,9 +184,9 @@ fn log<T: Serialize>(t: T, title: &str) -> anyhow::Result<()> {
             .open(log_location(title)?)
             .context("opening log file")?;
         let line = serde_json::to_string(&t)?;
-        writeln!(file, "{}", line)?;
+        writeln!(file, "{line}")?;
         Ok(())
     }
 
-    inner(t, title).with_context(|| format!("failed to log {}", title))
+    inner(t, title).with_context(|| format!("failed to log {title}"))
 }

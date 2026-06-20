@@ -1,220 +1,356 @@
-//! Anthropic (Claude) Messages API backend.
-
-use std::time::Duration;
-
-use anyhow::Context;
+use schemars::Schema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
-use crate::api::{Message, Role};
+use crate::agent::{Model, RawCall, Seed, Tool, ToolResult, SEED_CALL_ID, SEED_TOOL};
 
 const MAX_TOKENS: u32 = 80000;
-
-/// Anthropic 400s on an empty text block, so render empty fields as a visible
-/// placeholder.
-fn field_or_placeholder(field: &str) -> &str {
-    if field.is_empty() {
-        "(empty)"
-    } else {
-        field
-    }
-}
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 #[derive(Serialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
-enum CacheControl {
-    Ephemeral,
+struct SystemBlock {
+    #[serde(rename = "type")]
+    kind: TextType,
+    text: String,
 }
 
 #[derive(Serialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
+enum TextType {
+    Text,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 enum ContentBlock {
     Text {
         text: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        cache_control: Option<CacheControl>,
+    },
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        is_error: bool,
     },
 }
 
-impl ContentBlock {
-    fn text(text: impl Into<String>) -> Self {
-        ContentBlock::Text {
-            text: text.into(),
-            cache_control: None,
+#[derive(Serialize)]
+#[serde(tag = "role", rename_all = "snake_case")]
+enum Message {
+    User { content: Vec<ContentBlock> },
+    Assistant { content: Vec<AssistantBlock> },
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum AssistantBlock {
+    Text {
+        text: String,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
+    Thinking {
+        thinking: String,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
+    RedactedThinking {
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: Value,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
+}
+
+#[derive(Serialize)]
+struct ToolDef {
+    name: String,
+    description: String,
+    input_schema: Schema,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[allow(dead_code)]
+enum ToolChoice {
+    Auto,
+    Any,
+    Tool { name: String },
+}
+
+pub struct AnthropicAgent {
+    key: String,
+    model: String,
+    client: reqwest::blocking::Client,
+    system: Vec<SystemBlock>,
+    messages: Vec<Message>,
+    tools: Vec<ToolDef>,
+}
+
+#[derive(Serialize)]
+struct Request<'a> {
+    model: &'a str,
+    max_tokens: u32,
+    messages: &'a [Message],
+    tools: &'a [ToolDef],
+    tool_choice: ToolChoice,
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    system: &'a [SystemBlock],
+}
+
+impl AnthropicAgent {
+    pub fn new(key: String, model: String, seed: &Seed, tools: &[Tool]) -> Self {
+        let system = vec![SystemBlock {
+            kind: TextType::Text,
+            text: seed.system.to_string(),
+        }];
+        let messages = vec![
+            Message::User {
+                content: vec![ContentBlock::Text {
+                    text: seed.transform.to_string(),
+                }],
+            },
+            Message::Assistant {
+                content: vec![AssistantBlock::ToolUse {
+                    id: SEED_CALL_ID.to_string(),
+                    name: SEED_TOOL.to_string(),
+                    input: Seed::seed_call_args(),
+                    extra: Map::new(),
+                }],
+            },
+            Message::User {
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: SEED_CALL_ID.to_string(),
+                    content: seed.selected.to_string(),
+                    is_error: false,
+                }],
+            },
+        ];
+        let tools = tools
+            .iter()
+            .map(|t| ToolDef {
+                name: t.name.to_string(),
+                description: t.description.to_string(),
+                input_schema: t.input_schema.clone(),
+            })
+            .collect();
+        AnthropicAgent {
+            key,
+            model,
+            client: crate::backend::http_client(),
+            system,
+            messages,
+            tools,
+        }
+    }
+
+    fn request(&self) -> Request<'_> {
+        Request {
+            model: &self.model,
+            max_tokens: MAX_TOKENS,
+            messages: &self.messages,
+            tools: &self.tools,
+            tool_choice: ToolChoice::Auto,
+            system: &self.system,
         }
     }
 }
 
-#[derive(Serialize)]
-struct ChatMessage {
-    role: Role,
-    content: Vec<ContentBlock>,
+impl Model for AnthropicAgent {
+    fn turn(&mut self, results: Vec<ToolResult>) -> anyhow::Result<Vec<RawCall>> {
+        if !results.is_empty() {
+            let content = results
+                .into_iter()
+                .map(|r| {
+                    let (content, is_error) = match r.result {
+                        Ok(c) => (c, false),
+                        Err(c) => (c, true),
+                    };
+                    ContentBlock::ToolResult {
+                        tool_use_id: r.id,
+                        content,
+                        is_error,
+                    }
+                })
+                .collect();
+            self.messages.push(Message::User { content });
+        }
+
+        let body = post(&self.client, &self.key, &self.request())?;
+        let content = body
+            .get("content")
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Anthropic response missing content: {body}"))?;
+        let content: Vec<AssistantBlock> = serde_json::from_value(content)
+            .map_err(|e| anyhow::anyhow!("Anthropic content did not parse: {e}"))?;
+        let calls = calls_from_content(&content);
+        self.messages.push(Message::Assistant { content });
+        Ok(calls)
+    }
 }
 
-#[derive(Serialize)]
-struct MessagesRequest {
-    model: String,
-    max_tokens: u32,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    system: Vec<ContentBlock>,
-    messages: Vec<ChatMessage>,
+fn calls_from_content(content: &[AssistantBlock]) -> Vec<RawCall> {
+    content
+        .iter()
+        .filter_map(|b| match b {
+            AssistantBlock::ToolUse {
+                id, name, input, ..
+            } => Some(RawCall {
+                id: id.clone(),
+                name: name.clone(),
+                args: input.clone(),
+            }),
+            _ => None,
+        })
+        .collect()
 }
 
-#[derive(Deserialize)]
-struct MessagesResponse {
-    content: Vec<ResponseBlock>,
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
-enum ResponseBlock {
-    Text { text: String },
-    #[serde(other)]
-    Other,
-}
-
-/// Send a chat-style prompt to the Claude Messages API and return the text.
-pub fn complete(api_key: &str, model: &str, messages: &[Message]) -> anyhow::Result<String> {
-    let req = build_request(model, messages);
-
+fn post(client: &reqwest::blocking::Client, key: &str, req: &Request) -> anyhow::Result<Value> {
     tracing::debug!(
         "anthropic request: {}",
-        serde_json::to_string_pretty(&req).unwrap_or_default()
+        serde_json::to_value(req).unwrap_or_default()
     );
-
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(60 * 4))
-        .build()
-        .context("building HTTP client")?;
-
-    let response = client
-        .post(API_URL)
-        .header("x-api-key", api_key)
-        .header("anthropic-version", ANTHROPIC_VERSION)
-        .header("content-type", "application/json")
-        .json(&req)
-        .send()
-        .context("Failed to send request to Anthropic API")?;
-
-    let status = response.status();
-    let body = response
-        .json::<Value>()
-        .with_context(|| anyhow::anyhow!("Status: {status}. Failed to parse response body."))?;
-
-    if !status.is_success() {
-        let pretty = serde_json::to_string_pretty(&body).unwrap_or_else(|_| body.to_string());
-        return Err(anyhow::anyhow!("Status: {status}. Body: {pretty}"));
-    }
-
-    let parsed: MessagesResponse = serde_json::from_value(body.clone())
-        .map_err(|e| anyhow::anyhow!("Error while parsing response: {e} Body: {body}"))?;
-
-    let text: String = parsed
-        .content
-        .into_iter()
-        .filter_map(|b| match b {
-            ResponseBlock::Text { text } => Some(text),
-            ResponseBlock::Other => None,
-        })
-        .collect();
-
-    if text.is_empty() {
-        return Err(anyhow::anyhow!("Anthropic returned no text content."));
-    }
-
-    Ok(text)
-}
-
-fn build_request(model: &str, messages: &[Message]) -> MessagesRequest {
-    let mut system = Vec::new();
-    let mut convo: Vec<ChatMessage> = Vec::new();
-
-    for m in messages {
-        let mut blocks: Vec<ContentBlock> = m
-            .fields
-            .iter()
-            .map(|f| ContentBlock::text(field_or_placeholder(f)))
-            .collect();
-        // A cached turn caches everything up to and including its last block.
-        if m.cache {
-            if let Some(ContentBlock::Text { cache_control, .. }) = blocks.last_mut() {
-                *cache_control = Some(CacheControl::Ephemeral);
-            }
-        }
-        match m.role {
-            Role::System => system.extend(blocks),
-            Role::User | Role::Assistant => convo.push(ChatMessage {
-                role: m.role,
-                content: blocks,
-            }),
-        }
-    }
-
-    MessagesRequest {
-        model: model.to_string(),
-        max_tokens: MAX_TOKENS,
-        system,
-        messages: convo,
-    }
+    crate::backend::send_json(
+        client
+            .post(API_URL)
+            .header("x-api-key", key)
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .json(req),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
-    fn user(fields: &[&str]) -> Message {
-        Message::user(fields.iter().map(|f| f.to_string()).collect())
+    fn request_json(agent: &AnthropicAgent) -> Value {
+        serde_json::to_value(agent.request()).unwrap()
     }
 
     #[test]
-    fn build_request_shapes_anthropic_payload() {
-        let mut assistant = Message::assistant("ex_result");
-        assistant.cache = true;
-        let msgs = vec![
-            Message::system("SYS"),
-            user(&["ex_selected", "ex_transform"]),
-            assistant,
-            user(&["real_selected", "real_transform"]),
-        ];
-
-        let req = build_request("claude-opus-4-8", &msgs);
-        let v = serde_json::to_value(&req).unwrap();
-
-        assert_eq!(v["model"], "claude-opus-4-8");
-        assert_eq!(v["max_tokens"], 80000);
-        assert_eq!(v["system"][0]["text"], "SYS");
-
-        let m = v["messages"].as_array().unwrap();
-        assert_eq!(m.len(), 3);
-        assert_eq!(m[0]["role"], "user");
-        assert_eq!(m[0]["content"].as_array().unwrap().len(), 2);
-        assert_eq!(m[1]["role"], "assistant");
-        assert_eq!(m[2]["role"], "user");
-        assert_eq!(m[2]["content"].as_array().unwrap().len(), 2);
-
-        // The cached turn carries the breakpoint; the trailing input does not.
-        assert_eq!(m[1]["content"][0]["cache_control"]["type"], "ephemeral");
-        assert!(m[2]["content"][1].get("cache_control").is_none());
+    fn tool_choice_serializes_to_wire_shape() {
+        assert_eq!(
+            serde_json::to_value(ToolChoice::Auto).unwrap(),
+            json!({ "type": "auto" })
+        );
+        assert_eq!(
+            serde_json::to_value(ToolChoice::Any).unwrap(),
+            json!({ "type": "any" })
+        );
+        assert_eq!(
+            serde_json::to_value(ToolChoice::Tool { name: "edit".into() }).unwrap(),
+            json!({ "type": "tool", "name": "edit" })
+        );
     }
 
     #[test]
-    fn empty_fields_become_placeholder() {
-        let req = build_request("claude-opus-4-8", &[user(&["", "transform"])]);
-        let v = serde_json::to_value(&req).unwrap();
-        let s = serde_json::to_string(&v).unwrap();
-        assert!(!s.contains(r#""text":"""#), "empty text block leaked: {s}");
-        assert_eq!(v["messages"][0]["content"][0]["text"], "(empty)");
-        assert_eq!(v["messages"][0]["content"][1]["text"], "transform");
+    fn agent_request_carries_tools_and_seed() {
+        let tools = crate::agent::tools();
+        let seed = Seed {
+            system: "SYS",
+            selected: "selected",
+            transform: "transform",
+        };
+        let agent = AnthropicAgent::new("k".into(), "claude-opus-4-8".into(), &seed, &tools);
+        let req = request_json(&agent);
+
+        assert_eq!(req["system"][0]["type"], "text");
+        assert_eq!(req["system"][0]["text"], "SYS");
+        assert_eq!(req["messages"][0]["role"], "user");
+        assert_eq!(req["messages"][0]["content"][0]["type"], "text");
+        assert_eq!(req["messages"][0]["content"][0]["text"], "transform");
+        assert_eq!(req["messages"][0]["content"][1], Value::Null);
+        assert_eq!(req["messages"][1]["role"], "assistant");
+        assert_eq!(req["messages"][1]["content"][0]["type"], "tool_use");
+        assert_eq!(req["messages"][1]["content"][0]["name"], "view");
+        let seed_id = req["messages"][1]["content"][0]["id"].clone();
+        assert_eq!(req["messages"][2]["role"], "user");
+        assert_eq!(req["messages"][2]["content"][0]["type"], "tool_result");
+        assert_eq!(req["messages"][2]["content"][0]["tool_use_id"], seed_id);
+        assert_eq!(req["messages"][2]["content"][0]["content"], "selected");
+        assert_eq!(req["tool_choice"]["type"], "auto");
+        let names: Vec<&str> = req["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["edit", "view", "reset", "finish"]);
     }
 
     #[test]
-    fn no_system_yields_empty_system() {
-        let req = build_request("claude-opus-4-8", &[user(&["hi"])]);
-        let v = serde_json::to_value(&req).unwrap();
-        assert!(v.get("system").is_none());
-        assert_eq!(v["messages"][0]["role"], "user");
+    fn tool_result_turn_serializes_to_wire_shape() {
+        let tools = crate::agent::tools();
+        let seed = Seed {
+            system: "SYS",
+            selected: "selected",
+            transform: "transform",
+        };
+        let mut agent = AnthropicAgent::new("k".into(), "m".into(), &seed, &tools);
+        agent.messages.push(Message::User {
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "tu_1".into(),
+                content: "ok".into(),
+                is_error: false,
+            }],
+        });
+        let req = request_json(&agent);
+        let block = &req["messages"][3]["content"][0];
+        assert_eq!(req["messages"][3]["role"], "user");
+        assert_eq!(block["type"], "tool_result");
+        assert_eq!(block["tool_use_id"], "tu_1");
+        assert_eq!(block["content"], "ok");
+        assert_eq!(block["is_error"], false);
+    }
+
+    #[test]
+    fn echoed_assistant_turn_is_verbatim() {
+        let tools = crate::agent::tools();
+        let seed = Seed {
+            system: "SYS",
+            selected: "selected",
+            transform: "transform",
+        };
+        let mut agent = AnthropicAgent::new("k".into(), "m".into(), &seed, &tools);
+        let raw = json!([
+            { "type": "thinking", "thinking": "hmm", "signature": "sig" },
+            { "type": "tool_use", "id": "tu_1", "name": "edit", "input": { "old": "a", "new": "b" } }
+        ]);
+        let content: Vec<AssistantBlock> = serde_json::from_value(raw.clone()).unwrap();
+        agent.messages.push(Message::Assistant { content });
+        let req = request_json(&agent);
+        assert_eq!(req["messages"][3]["role"], "assistant");
+        assert_eq!(req["messages"][3]["content"], raw);
+    }
+
+    #[test]
+    fn parses_tool_use_blocks() {
+        let content: Vec<AssistantBlock> = serde_json::from_value(json!([
+            { "type": "text", "text": "let me fix that" },
+            { "type": "tool_use", "id": "tu_1", "name": "edit",
+              "input": { "old": "a", "new": "b" } },
+            { "type": "tool_use", "id": "tu_2", "name": "finish", "input": {} }
+        ]))
+        .unwrap();
+        let calls = calls_from_content(&content);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].id, "tu_1");
+        assert_eq!(calls[0].name, "edit");
+        assert_eq!(calls[0].args["old"], "a");
+        assert_eq!(calls[1].name, "finish");
+    }
+
+    #[test]
+    fn no_tool_use_is_no_calls() {
+        let content: Vec<AssistantBlock> =
+            serde_json::from_value(json!([{ "type": "text", "text": "all done" }])).unwrap();
+        assert!(calls_from_content(&content).is_empty());
     }
 }
