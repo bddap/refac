@@ -1,26 +1,13 @@
-//! Structured edits and how they're applied.
-//!
-//! The model calls a single-edit `edit` tool, possibly several times in one turn
-//! (both providers support parallel tool calls); refac applies each `{old, new}`
-//! replacement to the selected text. The hard part is that the model's `old`
-//! rarely matches byte-for-byte — indentation drifts, whitespace reflows, a
-//! block gets reworded. So matching runs a chain of progressively looser
-//! strategies, exact first, and the first candidate that lands a *unique* hit
-//! wins. A match that's missing or ambiguous is an error fed back to the model,
-//! never a silent mis-apply: a wrong edit is worse than a refused one.
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-// `schemars` turns the field doc comments below into the model-facing JSON-schema
-// descriptions, so they're verbatim model instructions, not narration for readers.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct Edit {
-    /// exact text to replace
+    #[schemars(description = "exact text to replace")]
     pub old: String,
-    /// replacement text
+    #[schemars(description = "replacement text")]
     pub new: String,
-    /// replace every occurrence
+    #[schemars(description = "replace every occurrence")]
     #[serde(default)]
     pub replace_all: bool,
 }
@@ -57,9 +44,6 @@ impl std::fmt::Display for EditError {
 
 impl std::error::Error for EditError {}
 
-/// Walks the replacer chain (exact first) and requires a unique hit unless
-/// `replace_all`. Folded over a turn's edits, so a later edit sees what an
-/// earlier one produced.
 pub fn apply(src: &str, edit: &Edit) -> Result<String, EditError> {
     if edit.old.is_empty() {
         return Err(EditError::EmptyOld);
@@ -70,17 +54,10 @@ pub fn apply(src: &str, edit: &Edit) -> Result<String, EditError> {
         });
     }
 
-    // Track the best diagnosis across the chain: an ambiguous candidate is a
-    // more useful complaint than "not found", so remember it if nothing unique
-    // turns up.
     let mut ambiguous: Option<usize> = None;
 
     for replacer in CHAIN {
         for cand in replacer(src, &edit.old) {
-            // A blank `old` line trims to "" and yields an empty span; matching
-            // "" hits between every char, so `replace_all` would splatter `new`
-            // across the whole buffer. Skip it — an empty candidate is never a
-            // real match.
             if cand.is_empty() {
                 continue;
             }
@@ -112,13 +89,8 @@ pub fn apply(src: &str, edit: &Edit) -> Result<String, EditError> {
     })
 }
 
-/// A replacer yields candidate substrings of `src` to look for, fuzzy intent but
-/// the yielded string is always exact text *from* `src` (or `old` itself, for
-/// the exact replacer) so the caller can find it and check uniqueness uniformly.
 type Replacer = fn(src: &str, old: &str) -> Vec<String>;
 
-/// Exact first, then progressively looser. Order matters: a precise match must
-/// win before a fuzzy one gets a chance.
 const CHAIN: &[Replacer] = &[
     simple,
     line_trimmed,
@@ -147,8 +119,6 @@ fn span(src: &str, lines: &[(usize, &str)], i: usize, k: usize) -> String {
     src[start..end].to_string()
 }
 
-/// Match line-by-line ignoring each line's surrounding whitespace; yield the
-/// original (untrimmed) source span so indentation is preserved on splice.
 fn line_trimmed(src: &str, old: &str) -> Vec<String> {
     let src_lines = lines_with_offsets(src);
     let old_lines: Vec<&str> = lines_with_offsets(old).iter().map(|(_, l)| *l).collect();
@@ -165,9 +135,6 @@ fn line_trimmed(src: &str, old: &str) -> Vec<String> {
     out
 }
 
-/// For 3+ line blocks: anchor on the first and last (trimmed) lines, and accept
-/// the window only if a majority of its non-empty middle lines also match. Lets
-/// a reworded interior through while resisting wild matches.
 fn block_anchor(src: &str, old: &str) -> Vec<String> {
     let src_lines = lines_with_offsets(src);
     let old_lines: Vec<&str> = lines_with_offsets(old).iter().map(|(_, l)| *l).collect();
@@ -194,8 +161,6 @@ fn block_anchor(src: &str, old: &str) -> Vec<String> {
                 matched += 1;
             }
         }
-        // Require some non-empty middle line to actually match — anchors alone
-        // (an all-blank middle) are too weak to trust.
         if considered > 0 && matched * 2 >= considered {
             out.push(span(src, &src_lines, i, i + n - 1));
         }
@@ -203,8 +168,6 @@ fn block_anchor(src: &str, old: &str) -> Vec<String> {
     out
 }
 
-/// Collapse `old` to whitespace-insensitive tokens and find a source region
-/// holding those tokens in order, separated only by whitespace.
 fn whitespace_normalized(src: &str, old: &str) -> Vec<String> {
     let tokens: Vec<&str> = old.split_whitespace().collect();
     if tokens.is_empty() {
@@ -215,8 +178,6 @@ fn whitespace_normalized(src: &str, old: &str) -> Vec<String> {
     let mut from = 0;
     while let Some(rel) = src[from..].find(tokens[0]) {
         let start = from + rel;
-        // Advance past the first char of this match (not one byte) so the next
-        // search stays on a char boundary even for multi-byte text.
         from = start + src[start..].chars().next().map_or(1, char::len_utf8);
         let mut pos = start + tokens[0].len();
         let mut ok = true;
@@ -238,8 +199,6 @@ fn whitespace_normalized(src: &str, old: &str) -> Vec<String> {
     out
 }
 
-/// Strip common leading indentation from `old` and from each same-height source
-/// window; where the dedented forms match, yield the original window.
 fn indentation_flexible(src: &str, old: &str) -> Vec<String> {
     let src_lines = lines_with_offsets(src);
     let old_lines: Vec<&str> = lines_with_offsets(old).iter().map(|(_, l)| *l).collect();
@@ -265,8 +224,6 @@ fn dedent(lines: &[&str]) -> Vec<String> {
         .map(|l| l.len() - l.trim_start().len())
         .min()
         .unwrap_or(0);
-    // `indent` is the min byte-width across lines, so on a given line it can land
-    // mid-char (multi-byte leading whitespace) — `get` declines that, no panic.
     lines
         .iter()
         .map(|l| l.get(indent..).unwrap_or(l).to_string())
@@ -289,7 +246,6 @@ mod tests {
         apply(text, &edit(old, new))
     }
 
-    /// Fold `apply` over a turn's worth of edits, as the driver does.
     fn apply_seq(text: &str, edits: &[Edit]) -> Result<String, EditError> {
         let mut buf = text.to_string();
         for e in edits {
@@ -308,7 +264,6 @@ mod tests {
 
     #[test]
     fn batch_applies_in_order() {
-        // a later edit can target text an earlier edit produced.
         let edits = vec![edit("foo", "bar"), edit("bar", "baz")];
         assert_eq!(apply_seq("foo", &edits).unwrap(), "baz");
         let edits = vec![edit("one", "1"), edit("two", "2")];
@@ -385,9 +340,6 @@ mod tests {
 
     #[test]
     fn dedented_old_matches_indented_source() {
-        // The model wrote `old` without the source's indentation; we still find
-        // the block. `new` is spliced verbatim, so the model owns the
-        // indentation it wants in the result.
         let src = "if cond:\n        a = 1\n        b = 2\n";
         let old = "a = 1\nb = 2";
         let new = "        a = 10\n        b = 20";
@@ -403,7 +355,6 @@ mod tests {
 
     #[test]
     fn whitespace_normalized_multibyte_no_panic() {
-        // Regression: a non-ASCII first token must not slice mid-char.
         assert!(matches!(
             run("α   β", "α x", "z"),
             Err(EditError::NotFound { .. })
@@ -414,9 +365,6 @@ mod tests {
     #[test]
     fn block_anchor_reworded_middle() {
         let src = "fn f() {\n    let a = compute();\n    let b = a + 1;\n    return b;\n}";
-        // The model's `old` got the last middle line wrong (return b -> return
-        // result). Exact and line-trimmed both miss; the first/last anchors plus
-        // a majority of matching middle lines pin the real region.
         let old = "fn f() {\n    let a = compute();\n    let b = a + 1;\n    return result;\n}";
         let got = run(src, old, "fn f() { 42 }").unwrap();
         assert_eq!(got, "fn f() { 42 }");
@@ -424,9 +372,6 @@ mod tests {
 
     #[test]
     fn blank_old_does_not_splatter_under_replace_all() {
-        // A whitespace-only `old` trims to "" and the line matchers yield empty
-        // spans; without the empty-candidate guard, replace_all on "" would
-        // rewrite between every char. It must report NotFound instead.
         let e = Edit {
             old: " ".into(),
             new: "X".into(),
@@ -440,7 +385,6 @@ mod tests {
 
     #[test]
     fn exact_beats_fuzzy_for_uniqueness() {
-        // two indentation-equal blocks, but an exact match is unique → applied.
         let src = "  a = 1\n    a = 1\n";
         let got = run(src, "    a = 1", "    a = 2").unwrap();
         assert_eq!(got, "  a = 1\n    a = 2\n");

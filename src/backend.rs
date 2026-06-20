@@ -1,5 +1,3 @@
-//! Turning a `Provider` choice into a ready-to-run, key-bearing edit-mode model.
-
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -10,7 +8,6 @@ use crate::anthropic::AnthropicAgent;
 use crate::config_files::{Provider, Secrets};
 use crate::openai::OpenaiAgent;
 
-/// The one spot that knows how each provider sources its API key.
 fn key_for(provider: Provider, secrets: &Secrets) -> Result<String> {
     match provider {
         Provider::Anthropic => secrets.anthropic_api_key.clone().ok_or_else(|| {
@@ -45,10 +42,6 @@ pub fn http_client() -> reqwest::blocking::Client {
         .expect("building HTTP client")
 }
 
-/// Send a built (authed, JSON-bodied) request and return the parsed response.
-/// Reads the body as text first so a non-JSON error page — what a gateway or
-/// proxy returns on 429/5xx — survives into the error instead of being lost to a
-/// JSON-parse failure.
 pub fn send_json(request: reqwest::blocking::RequestBuilder) -> Result<Value> {
     let response = request.send().context("sending request")?;
     let status = response.status();

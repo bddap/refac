@@ -1,5 +1,3 @@
-//! Anthropic (Claude) Messages API edit-mode agent.
-
 use schemars::Schema;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -40,16 +38,8 @@ enum ContentBlock {
 #[derive(Serialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
 enum Message {
-    User {
-        content: Vec<ContentBlock>,
-    },
-    /// Raw `Value`, not typed blocks: the assistant turn is echoed back verbatim
-    /// for the `tool_use`/`tool_result` handshake, and re-serializing parsed
-    /// blocks would reorder fields and drop ones refac doesn't model (e.g.
-    /// `thinking` signatures) that the next turn depends on.
-    Assistant {
-        content: Value,
-    },
+    User { content: Vec<ContentBlock> },
+    Assistant { content: Value },
 }
 
 #[derive(Serialize)]
@@ -97,8 +87,6 @@ impl AnthropicAgent {
             kind: TextType::Text,
             text: seed.system.to_string(),
         }];
-        // User instruction, then the synthetic `view` call (see `SEED_TOOL`) whose
-        // result carries `selected`.
         let messages = vec![
             Message::User {
                 content: vec![ContentBlock::Text {
@@ -218,8 +206,6 @@ fn post(client: &reqwest::blocking::Client, key: &str, req: &Request) -> anyhow:
 mod tests {
     use super::*;
 
-    /// The wire JSON refac actually sends — the unit tests pin the typed structs
-    /// to this exact shape so a serialization change can't silently break it.
     fn request_json(agent: &AnthropicAgent) -> Value {
         serde_json::to_value(agent.request()).unwrap()
     }
@@ -237,13 +223,10 @@ mod tests {
 
         assert_eq!(req["system"][0]["type"], "text");
         assert_eq!(req["system"][0]["text"], "SYS");
-        // The instruction is the only user message; `selected` is NOT among the
-        // user content, it arrives as the seeded `view` call's result below.
         assert_eq!(req["messages"][0]["role"], "user");
         assert_eq!(req["messages"][0]["content"][0]["type"], "text");
         assert_eq!(req["messages"][0]["content"][0]["text"], "transform");
         assert_eq!(req["messages"][0]["content"][1], Value::Null);
-        // The pre-seeded `view` call and its result — the sole carrier of `selected`.
         assert_eq!(req["messages"][1]["role"], "assistant");
         assert_eq!(req["messages"][1]["content"][0]["type"], "tool_use");
         assert_eq!(req["messages"][1]["content"][0]["name"], "view");
@@ -278,8 +261,6 @@ mod tests {
                 is_error: false,
             }],
         });
-        // Index 3: the three-message seed (user instruction, seeded `view` call,
-        // its result) occupies 0..3.
         let req = request_json(&agent);
         let block = &req["messages"][3]["content"][0];
         assert_eq!(req["messages"][3]["role"], "user");
@@ -298,8 +279,6 @@ mod tests {
             transform: "transform",
         };
         let mut agent = AnthropicAgent::new("k".into(), "m".into(), &seed, &tools);
-        // An assistant turn carrying a block type refac doesn't model must
-        // round-trip unchanged.
         let raw = json!([
             { "type": "thinking", "thinking": "hmm", "signature": "sig" },
             { "type": "tool_use", "id": "tu_1", "name": "edit", "input": { "old": "a", "new": "b" } }
@@ -307,7 +286,6 @@ mod tests {
         agent.messages.push(Message::Assistant {
             content: raw.clone(),
         });
-        // Index 3: the three-message seed occupies 0..3.
         let req = request_json(&agent);
         assert_eq!(req["messages"][3]["role"], "assistant");
         assert_eq!(req["messages"][3]["content"], raw);

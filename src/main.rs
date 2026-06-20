@@ -27,13 +27,10 @@ struct Opts {
 
 #[derive(Parser)]
 enum SubCommand {
-    /// Save your API key for future use. Pass `--provider`, or pick one interactively.
     Login {
         #[clap(long)]
         provider: Option<Provider>,
     },
-    /// Apply the instructions encoded in `transform` to the text in `selected`.
-    /// Get it? 'refac tor'
     Tor { selected: String, transform: String },
 }
 
@@ -42,7 +39,7 @@ fn main() {
     match run() {
         Ok(()) => {}
         Err(e) => {
-            eprintln!("{:?}", e);
+            eprintln!("{e:?}");
             std::process::exit(1);
         }
     }
@@ -88,7 +85,7 @@ fn run() -> anyhow::Result<()> {
             let secrets = Secrets::load()?;
             let config = Config::load()?;
             let completion = refactor(selected, transform, &secrets, &config)?;
-            print!("{}", completion);
+            print!("{completion}");
         }
     };
 
@@ -104,9 +101,6 @@ fn refactor(
     let provider = config.provider(sc);
     let model = config.model(provider);
 
-    // The edit buffer and the shown `selected` must be the same string, including
-    // the empty-input placeholder — that's what lets the model generate from an
-    // empty selection: it `edit`s the placeholder away.
     let seed_selected = agent::placeholder_if_empty(&selected).to_owned();
     let seed = agent::Seed {
         system: prompt::SYSTEM_PROMPT,
@@ -122,8 +116,6 @@ fn refactor(
         agent::DEFAULT_MAX_TURNS,
     )?;
 
-    // Log each edit attempt so we can see how often the model's `old` misses —
-    // the failure-rate signal.
     for attempt in &outcome.attempts {
         let _ = log(
             EditLog {
@@ -192,9 +184,9 @@ fn log<T: Serialize>(t: T, title: &str) -> anyhow::Result<()> {
             .open(log_location(title)?)
             .context("opening log file")?;
         let line = serde_json::to_string(&t)?;
-        writeln!(file, "{}", line)?;
+        writeln!(file, "{line}")?;
         Ok(())
     }
 
-    inner(t, title).with_context(|| format!("failed to log {}", title))
+    inner(t, title).with_context(|| format!("failed to log {title}"))
 }

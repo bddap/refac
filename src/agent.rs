@@ -1,9 +1,3 @@
-//! The edit loop: the model calls tools (`edit`, `view`, `reset`, `finish`),
-//! refac applies each, feeds the result back, and repeats until the model
-//! finishes or a guard trips. Provider-agnostic and IO-free — a [`Model`] is one
-//! turn (send the conversation + tools, get back the calls); the providers
-//! implement it over their wire formats.
-
 use std::collections::HashMap;
 
 use anyhow::Result;
@@ -13,17 +7,12 @@ use serde_json::Value;
 
 use crate::edit::{self, Edit};
 
-/// The one conversation shape refac ever sends, so the agents take it whole — a
-/// malformed conversation can't be built.
 pub struct Seed<'a> {
     pub system: &'a str,
     pub selected: &'a str,
     pub transform: &'a str,
 }
 
-/// The conversation opens with a synthetic `view` call whose result is
-/// `selected` — the only place `selected` enters, so the model reads it exactly
-/// as it reads every later `view`, never as a user message.
 pub const SEED_TOOL: &str = "view";
 pub const SEED_CALL_ID: &str = "seed_view";
 
@@ -33,9 +22,6 @@ impl Seed<'_> {
     }
 }
 
-/// Both providers reject an empty user field (Anthropic 400s); render it as a
-/// visible placeholder. Shared so the two wire formats agree on what empty looks
-/// like.
 pub fn placeholder_if_empty(field: &str) -> &str {
     if field.is_empty() {
         "(empty)"
@@ -44,18 +30,12 @@ pub fn placeholder_if_empty(field: &str) -> &str {
     }
 }
 
-/// Read-only state a tool may consult beyond the live buffer, so `reset` need not
-/// close over the original.
 pub struct Ctx<'a> {
     original: &'a str,
 }
 
-/// A tool's reply to the model: `Ok` shown as the result, `Err` as an error
-/// result. (The handler's *outer* `Result` is a malformed call instead.)
 pub type Reply = std::result::Result<String, String>;
 
-/// What one tool call does to the loop. Each tool returns its own `Step` —
-/// including the optional [`Attempt`] to log — so `run` needs no per-tool cases.
 enum Step {
     Continue {
         reply: Reply,
@@ -75,8 +55,6 @@ impl Step {
 
 type Handler = Box<dyn Fn(&mut String, &Ctx, Value) -> Result<Step>>;
 
-/// One tool offered to the model. [`Tool::new`] binds the schema and the handler
-/// to a single args type, so what's advertised and what's parsed can't drift.
 pub struct Tool {
     pub name: &'static str,
     pub description: &'static str,
@@ -170,18 +148,12 @@ pub struct ToolResult {
     pub result: Reply,
 }
 
-/// Answering the previous calls and taking the next turn are one method so the
-/// loop can't advance without a result for every outstanding call, which both
-/// wire protocols require. Empty `results` on the first turn; an empty return
-/// means the model stopped without a call (done).
 pub trait Model {
     fn turn(&mut self, results: Vec<ToolResult>) -> Result<Vec<RawCall>>;
 }
 
 pub const DEFAULT_MAX_TURNS: usize = 25;
 
-/// Give up after this many consecutive turns in which every edit failed — the
-/// model is stuck and burning tokens.
 const MAX_CONSECUTIVE_FAILURES: usize = 3;
 
 #[derive(Debug)]
@@ -196,7 +168,6 @@ pub struct Outcome {
     pub attempts: Vec<Attempt>,
 }
 
-/// `max_turns` caps assistant turns so `view`/`reset` can't spin forever.
 pub fn run(model: &mut dyn Model, original: String, max_turns: usize) -> Result<Outcome> {
     let tools = tools();
     let by_name: HashMap<&str, &Tool> = tools.iter().map(|t| (t.name, t)).collect();
@@ -236,8 +207,6 @@ pub fn run(model: &mut dyn Model, original: String, max_turns: usize) -> Result<
                     })
                 }
                 Ok(Step::Continue { reply, attempt }) => (reply, attempt),
-                // A malformed call (args that didn't deserialize) is reported to
-                // the model like any other tool error, not a fatal loop error.
                 Err(err) => (Err(err.to_string()), None),
             };
 
@@ -252,8 +221,6 @@ pub fn run(model: &mut dyn Model, original: String, max_turns: usize) -> Result<
             results.push(ToolResult { id, result: reply });
         }
 
-        // A turn "fails" only if it tried to edit and every edit missed; a turn
-        // of pure `view`/`reset` shouldn't count against the model.
         if edits_attempted > 0 && edits_failed == edits_attempted {
             consecutive_failures += 1;
             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
@@ -276,8 +243,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// A model driven by a canned script: each entry is the tool calls for one
-    /// turn. It records the results refac sends back so tests can assert on them.
     struct ScriptedModel {
         turns: std::vec::IntoIter<Vec<RawCall>>,
         seen: Vec<Vec<ToolResult>>,
@@ -294,8 +259,6 @@ mod tests {
 
     impl Model for ScriptedModel {
         fn turn(&mut self, results: Vec<ToolResult>) -> Result<Vec<RawCall>> {
-            // `results` are the previous turn's tool results, so `seen[i]` holds
-            // the results the model received entering turn `i` (seen[0] is empty).
             self.seen.push(results);
             Ok(self.turns.next().unwrap_or_default())
         }
@@ -331,9 +294,6 @@ mod tests {
 
     #[test]
     fn empty_selection_placeholder_is_editable_into_generated_text() {
-        // refac advertises generation from an empty selection (README fizzbuzz).
-        // The buffer is seeded with the same placeholder the model is shown, so
-        // the model turns it into output by editing the placeholder away.
         let seeded = placeholder_if_empty("");
         let mut m = ScriptedModel::new(vec![
             vec![edit_call("1", "(empty)", "fn main() {}")],
@@ -364,7 +324,7 @@ mod tests {
     #[test]
     fn failed_edit_is_reported_then_recovered() {
         let mut m = ScriptedModel::new(vec![
-            vec![edit_call("1", "nope", "x")], // misses
+            vec![edit_call("1", "nope", "x")],
             vec![edit_call("2", "a", "b"), call("3", "finish")],
         ]);
         let out = run(&mut m, "a".into(), TURNS).unwrap().text;
@@ -424,7 +384,7 @@ mod tests {
     fn pure_view_turns_do_not_count_as_failures() {
         let mut m = ScriptedModel::new(vec![
             vec![edit_call("1", "nope", "x")],
-            vec![call("2", "view")], // resets the streak
+            vec![call("2", "view")],
             vec![edit_call("3", "nope", "x")],
             vec![edit_call("4", "a", "b"), call("5", "finish")],
         ]);

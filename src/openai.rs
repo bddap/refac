@@ -1,5 +1,3 @@
-//! OpenAI chat-completions API edit-mode agent.
-
 use schemars::Schema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -21,14 +19,9 @@ enum Message {
         tool_call_id: String,
         content: String,
     },
-    /// A newtype variant (not fields) so the received [`AssistantTurn`] flows
-    /// straight back out for the echo with no field-by-field copy to drift.
     Assistant(AssistantTurn),
 }
 
-/// `arguments` stays a verbatim `String`, not a parsed `Value`: it's a JSON
-/// string on the wire, and reparsing would reorder keys and renormalize
-/// numbers/whitespace, so the echo would no longer match the received bytes.
 #[derive(Serialize, Deserialize)]
 struct ToolCall {
     id: String,
@@ -43,11 +36,6 @@ struct FunctionCall {
     arguments: String,
 }
 
-/// Fully typed rather than a raw `Value`: unlike Anthropic (whose opaque
-/// `thinking` blocks must round-trip verbatim), chat-completions has no
-/// echo-required fields beyond these, so unmodeled ones (e.g. `refusal`) can
-/// drop on echo. Must serialize to a JSON object — `Message`'s `tag = "role"`
-/// injects `role` into this value's map, which needs a map-shaped inner.
 #[derive(Serialize, Deserialize)]
 struct AssistantTurn {
     content: Option<String>,
@@ -93,8 +81,6 @@ struct Request<'a> {
 
 impl OpenaiAgent {
     pub fn new(key: String, model: String, seed: &Seed, tools: &[Tool]) -> Self {
-        // User instruction, then the synthetic `view` call (see `SEED_TOOL`) whose
-        // result carries `selected`.
         let messages = vec![
             Message::System {
                 content: seed.system.to_string(),
@@ -150,8 +136,6 @@ impl OpenaiAgent {
 
 impl Model for OpenaiAgent {
     fn turn(&mut self, results: Vec<ToolResult>) -> anyhow::Result<Vec<RawCall>> {
-        // chat-completions has no error flag on a tool message, so mark a failed
-        // result in the content itself.
         for r in results {
             let content = match r.result {
                 Ok(c) => c,
@@ -176,9 +160,6 @@ impl Model for OpenaiAgent {
     }
 }
 
-/// chat-completions delivers each call's `arguments` as a JSON string; parse it
-/// into the [`RawCall::args`] object refac dispatches on. A call whose arguments
-/// aren't valid JSON falls back to an empty object rather than dropping the call.
 fn raw_calls(tool_calls: &[ToolCall]) -> Vec<RawCall> {
     tool_calls
         .iter()
@@ -200,8 +181,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// The wire JSON refac actually sends — the unit tests pin the typed structs
-    /// to this exact shape so a serialization change can't silently break it.
     fn request_json(agent: &OpenaiAgent) -> Value {
         serde_json::to_value(agent.request()).unwrap()
     }
@@ -220,11 +199,8 @@ mod tests {
         assert_eq!(req["tool_choice"], "auto");
         assert_eq!(req["messages"][0]["role"], "system");
         assert_eq!(req["messages"][0]["content"], "SYS");
-        // The instruction is the only user message; `selected` is NOT a user
-        // message, it arrives as the seeded `view` call's result below.
         assert_eq!(req["messages"][1]["role"], "user");
         assert_eq!(req["messages"][1]["content"], "transform");
-        // The pre-seeded `view` call and its result — the sole carrier of `selected`.
         assert_eq!(req["messages"][2]["role"], "assistant");
         assert_eq!(req["messages"][2]["tool_calls"][0]["function"]["name"], "view");
         let seed_id = req["messages"][2]["tool_calls"][0]["id"].clone();
@@ -254,8 +230,6 @@ mod tests {
             tool_call_id: "c1".into(),
             content: "ok".into(),
         });
-        // Index 4: the four-message seed (system, user instruction, seeded `view`
-        // call, its result) occupies 0..4.
         let req = request_json(&agent);
         let msg = &req["messages"][4];
         assert_eq!(msg["role"], "tool");
@@ -272,9 +246,6 @@ mod tests {
             transform: "transform",
         };
         let mut agent = OpenaiAgent::new("k".into(), "m".into(), &seed, &tools);
-        // A tool-calling assistant turn round-trips to the canonical wire shape:
-        // `role` once, a `null` content, and the typed `tool_calls` with their
-        // `arguments` JSON string untouched.
         let raw = json!({
             "role": "assistant",
             "content": null,
@@ -285,21 +256,13 @@ mod tests {
         });
         let turn: AssistantTurn = serde_json::from_value(raw.clone()).unwrap();
         agent.messages.push(Message::Assistant(turn));
-        // Index 4: the four-message seed occupies 0..4.
         assert_eq!(request_json(&agent)["messages"][4], raw);
-        // Each assistant message's role-tagged enum must emit `role` exactly once
-        // (the bug a second, body-carried `role` would reintroduce). Two assistant
-        // turns here — the seeded `view` call and the one just pushed — so exactly
-        // two; a duplicated `role` would push the count past two.
         let wire = serde_json::to_string(&agent.request()).unwrap();
         assert_eq!(wire.matches("\"role\":\"assistant\"").count(), 2);
     }
 
     #[test]
     fn assistant_arguments_string_is_byte_identical() {
-        // `arguments` stays a verbatim `String`: a payload serde_json would
-        // reorder (`b` before `a`) and renormalize (spaces, number form) on a
-        // reparse must echo back byte-for-byte.
         let args = "{\"b\": 1, \"a\": 1.0, \"n\": 1e3}";
         let raw = json!({
             "role": "assistant",

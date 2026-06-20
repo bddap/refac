@@ -16,8 +16,6 @@ pub struct Secrets {
 }
 
 impl Secrets {
-    /// Env vars (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) take precedence over
-    /// `secrets.toml`, and a missing file is fine — env vars alone are enough.
     pub fn load() -> anyhow::Result<Self> {
         let mut secrets: Secrets = match base()?.find_config_file("secrets.toml") {
             Some(path) => toml::from_str(&fs::read_to_string(path)?)?,
@@ -35,7 +33,6 @@ impl Secrets {
     pub fn save(&self) -> anyhow::Result<()> {
         let path = base()?.place_config_file("secrets.toml")?;
         let contents = toml::to_string(self)?;
-        // Holds the API key in cleartext — keep it owner-only.
         #[cfg(unix)]
         {
             use std::io::Write;
@@ -47,8 +44,6 @@ impl Secrets {
                 .mode(0o600)
                 .open(&path)?
                 .write_all(contents.as_bytes())?;
-            // `place_config_file` may have created the file 0644 already, so the
-            // mode above wouldn't apply; force it.
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
         }
@@ -80,9 +75,7 @@ impl Config {
             None => Config::default(),
         };
         if let Ok(from_env) = std::env::var("REFAC_PROVIDER") {
-            // Parse through the same ValueEnum that defines the variants, so the
-            // accepted spellings can't drift from `Provider` itself.
-            let provider = clap::ValueEnum::from_str(&from_env, /* ignore_case */ true)
+            let provider = clap::ValueEnum::from_str(&from_env, true)
                 .map_err(|e| anyhow::anyhow!("invalid REFAC_PROVIDER: {e}"))?;
             ret.provider = Some(provider);
         }
@@ -92,8 +85,6 @@ impl Config {
         Ok(ret)
     }
 
-    /// An explicit choice wins; otherwise infer from the configured keys, leaning
-    /// Anthropic when both or neither are present.
     pub fn provider(&self, secrets: &Secrets) -> Provider {
         if let Some(p) = self.provider {
             return p;
