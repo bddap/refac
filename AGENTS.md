@@ -14,6 +14,15 @@ Doc comments on crate-internal items get the same bar: keep one only for a
 non-obvious WHY or when a macro consumes it (e.g. a `schemars` field doc that
 becomes a model-facing schema description).
 
+## History
+
+The history of a codebase should not be encoded in or inferrable from the
+codebase itself. Systems at rest should look as if they were designed this way
+from the start. Exceptions exist, including git history and changelogs.
+Implications include immediate refactors to simplify and remove old patterns,
+and immediate sweeps and cleanups of code and documentation included with each
+modification.
+
 ## Types
 
 Prefer real types over `serde_json::Value` or stringly-typed data for anything
